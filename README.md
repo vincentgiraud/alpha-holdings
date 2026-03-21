@@ -2,6 +2,22 @@
 
 A Python-first research platform for portfolio construction, rebalancing, backtesting, and performance analytics. Designed to bootstrap with free data sources (Yahoo Finance, SEC EDGAR, Stooq) while maintaining a clean abstraction layer that allows seamless upgrade to paid data vendors (Bloomberg, FactSet, LSEG) without rewriting portfolio logic.
 
+## Current Implementation Status
+
+Implemented now:
+- Domain contracts and investor profile models
+- Profile-to-constraints resolver and top-level asset allocation
+- Goal analytics baseline
+- Unit tests and BDD scenarios
+
+Partially implemented now:
+- CLI surface exists, but only `alpha --version` and `alpha check` are functional
+
+Planned next:
+- Provider abstractions and free adapters
+- Normalization/storage pipeline
+- Portfolio construction, rebalance, backtest command workflows
+
 ## Quick Start
 
 ### Prerequisites
@@ -20,7 +36,7 @@ A Python-first research platform for portfolio construction, rebalancing, backte
 
 2. **Install dependencies:**
    ```bash
-   uv sync
+   uv sync --extra dev
    ```
 
 3. **Configure environment:**
@@ -31,7 +47,7 @@ A Python-first research platform for portfolio construction, rebalancing, backte
 
 4. **Verify installation:**
    ```bash
-   pytest
+   uv run pytest -q
    ```
 
 ## Architecture Overview
@@ -98,6 +114,8 @@ alpha_holdings/
 
 ## Recommended Workflows
 
+The examples below describe target workflows for upcoming phases. The corresponding CLI commands are not all implemented yet.
+
 ### Refresh and Normalize
 ```bash
 alpha refresh --universe seed_universe.csv --sources yahoo,edgar --output data/
@@ -133,7 +151,7 @@ To add a paid data vendor (e.g., Bloomberg):
 
 ### Run tests
 ```bash
-pytest
+uv run pytest -q
 ```
 
 ### Format and lint
@@ -144,9 +162,14 @@ ruff format src/ tests/
 
 ### Coverage report
 ```bash
-pytest --cov=src/alpha_holdings
+uv run pytest --cov=src/alpha_holdings
 open htmlcov/index.html
 ```
+
+## Tracking
+
+- Long-term roadmap: `PLAN.md`
+- Active execution status: `STATUS.md`
 
 ## Configuration
 

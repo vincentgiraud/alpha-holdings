@@ -2,6 +2,15 @@
 
 Build a Python-first research platform managed with uv, starting from free daily market and filing-derived data but structured so paid vendors can be added later by swapping provider adapters rather than rewriting portfolio logic. The first milestone should bootstrap the repository, define stable data contracts, and deliver an end-to-end research loop for a paper portfolio with scoring, construction, rebalancing, backtesting, and performance analytics.
 
+## Phase Completion Snapshot
+
+- Phase 1 (Bootstrap/contracts/profile/allocation/goal analytics): done
+- Phase 2 (Provider abstraction/adapters/normalization/storage): not started
+- Phase 3 (Universe and scoring): not started
+- Phase 4 (Construction/rebalance/backtest): not started
+- Phase 5 (Analytics workflows and full CLI surface): not started
+- Phase 6 (Upgrade-path hardening and final docs): in progress
+
 ## Steps
 
 1. **Phase 1: Bootstrap.** Initialize the repository with uv-managed Python packaging, project metadata, lint/test tooling, a top-level README.md, and a .gitignore tuned for Python, uv, caches, notebooks, environment files, and local data artifacts.
@@ -45,6 +54,34 @@ Build a Python-first research platform managed with uv, starting from free daily
 5. Simulate a future vendor migration by running the same downstream scoring and construction tests against a mock paid adapter with the same contracts.
 6. Manually verify that README.md explains setup, free-data limitations, local storage behavior, and the path for introducing paid providers later.
 
+### Current Test Strategy (Implemented)
+
+The test suite is split into two layers for readability and intent clarity.
+
+1. **Function/unit tests (TDD-oriented):** fast checks for pure logic, validation, and deterministic calculations.
+   - Files: `tests/test_models.py`, `tests/test_profiles.py`, `tests/test_analytics.py`
+2. **Scenario tests (BDD-oriented):** business behavior in Given/When/Then format using `pytest-bdd`.
+   - Files: `tests/bdd/features/asset_allocation.feature`, `tests/bdd/test_asset_allocation_bdd.py`
+
+### Current Scenario Coverage (Implemented)
+
+1. Crypto remains excluded when `crypto_enabled=true` but `risk_appetite=3`.
+2. Crypto is included when `crypto_enabled=true` and `risk_appetite=4`.
+3. For otherwise identical profiles, shorter horizon (5y) results in higher bond target than longer horizon (20y).
+
+### Test Commands
+
+1. Run all tests:
+   - `uv run pytest -q`
+2. Run function/unit tests only:
+   - `uv run pytest tests/test_models.py tests/test_profiles.py tests/test_analytics.py -q`
+3. Run scenario/BDD tests only:
+   - `uv run pytest tests/bdd -q`
+4. Run a single function test:
+   - `uv run pytest tests/test_profiles.py::TestAssetAllocator::test_allocate_fat_fire_with_crypto -q`
+5. Run a single BDD scenario by text filter:
+   - `uv run pytest tests/bdd -k "Shorter horizon increases bond allocation" -q`
+
 ## Decisions
 
 - **Included in initial build:** uv-based Python project setup, .gitignore, README.md, free-data provider abstraction, paper portfolio operation, scoring, portfolio construction, rebalancing, backtesting, and benchmark-relative analytics.
@@ -59,6 +96,7 @@ Build a Python-first research platform managed with uv, starting from free daily
 - **Python version:** 3.12. Key dependencies: `pydantic` v2 for domain models and contracts, `yfinance` for Yahoo Finance adapter, `pandas` and `pyarrow` for data handling and parquet, `duckdb` for local relational metadata and analytics queries, `typer` for the CLI, `pytest` for tests, `ruff` for linting and formatting.
 - **Seed test universe:** 25 US large-cap names plus 10 developed ex-US names stored as a static fixture CSV at `tests/fixtures/seed_universe.csv`. This universe is used for all deterministic backtest, rebalancing, and analytics tests.
 - **Default portfolio constraint values** (all config-driven and overridable via InvestorProfile): max single-name weight 5%, sector deviation vs. benchmark ±5pp, country deviation vs. benchmark ±5pp, annual turnover cap 50%, minimum holdings 30. The ProfileToConstraints resolver may tighten or relax these based on horizon, risk appetite, and FIRE variant — for example, a coast_fire profile with 15+ years will loosen turnover to 30% and widen sector bands; a retirement_complement profile near withdrawal will tighten max drawdown tolerance and enforce a minimum cash-like allocation.
+- **Testing organization decision:** keep unit/function tests and BDD scenario tests separate to improve readability. Unit tests protect internal logic contracts; BDD tests protect business behavior and policy rules.
 
 ## Further Considerations
 
