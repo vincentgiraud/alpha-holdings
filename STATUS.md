@@ -1,14 +1,14 @@
 # Status
 
 ## Now
-- Phase 1 foundation is complete and validated.
-- Test strategy is split into function/unit tests (TDD-oriented) and BDD scenario tests.
-- All current tests are passing.
+- Phase 2 provider abstraction is in progress.
+- Provider ABCs (`base.py`) and free adapter skeletons are implemented.
+- 47 provider contract tests added; all 66 tests pass.
 
 ## Next (Top 3)
-1. Implement provider abstraction interfaces in `src/alpha_holdings/data/providers/base.py`.
-2. Add free-adapter skeletons (`yahoo.py`, `stooq.py`, `edgar.py`) conforming to contracts.
-3. Add provider contract tests to enforce parity between free and future paid adapters.
+1. Implement normalization layer and local storage (parquet snapshots + DuckDB metadata).
+2. Wire up Yahoo and Stooq adapters in the `alpha refresh` CLI command.
+3. Add provider contract tests for a mock paid adapter to validate parity enforcement.
 
 ## Blocked
 - No hard blockers currently.
