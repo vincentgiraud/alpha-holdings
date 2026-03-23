@@ -10,13 +10,13 @@
 ## Now
 - Phases 1–4 complete. Phase 5 in progress. Phase 6 hardening ongoing.
 - `alpha construct`, `alpha rebalance`, `alpha backtest`, `alpha report` all implemented.
-- 207 tests pass (77% code coverage). Lint and format clean.
-- Next: portfolio snapshot persistence, benchmark-relative analytics, additional hardening tests.
+- Portfolio snapshot persistence implemented: `holdings_snapshot_{portfolio_id}` dataset tracks shares, weighted-average book cost, realized gains, and unrealized gains after each rebalance.
+- 241 tests pass (229 + 12 new BDD scenarios). Lint and format clean.
+- Next: benchmark-relative analytics (factor attribution), HTML report output.
 
 ## Upcoming Work
 
 ### Phase 5
-- [ ] Improve portfolio snapshot persistence (holdings state tracking)
 - [ ] Add benchmark-relative analytics (factor attribution)
 - [ ] Extend `alpha report` with HTML output
 - [ ] Add portfolio history visualization (NAV, weights over time)
@@ -35,7 +35,7 @@
 - Backtest uses in-memory scoring without fundamentals factors (free-source data degradation). Financial snapshots added in future enhancement.
 - Sector deviation enforcement deferred until sector metadata is added to seed universe.
 - `azure_blob` backend remains a contract seam and intentionally raises `NotImplementedError` until DevOps phase implementation.
-- Portfolio holdings state (book cost, realized gains) not yet tracked; current system assumes paper trades from target weights.
+- Portfolio holdings state (book cost, realized gains) tracked via `holdings_snapshot_{portfolio_id}` dataset; each rebalance run persists a new snapshot.
 - Optional cleanup pending: migrate Pydantic `Config` usage to `ConfigDict` to remove deprecation warnings.
 
 ## Test Commands

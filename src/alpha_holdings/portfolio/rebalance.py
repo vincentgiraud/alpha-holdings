@@ -14,6 +14,7 @@ from pathlib import Path
 import pandas as pd
 
 from alpha_holdings.data.storage import StorageBackend
+from alpha_holdings.portfolio.state import snapshot_holdings
 
 
 @dataclass(slots=True)
@@ -28,6 +29,7 @@ class RebalanceResult:
     sells: int
     estimated_turnover: float
     snapshot_path: Path
+    holdings_snapshot_path: Path | None
     proposals: pd.DataFrame
 
 
@@ -101,6 +103,16 @@ def rebalance_portfolio(
     sells = int((proposals["side"] == "sell").sum()) if not proposals.empty else 0
     turnover = float(proposals["abs_weight_change"].sum()) / 2.0 if not proposals.empty else 0.0
 
+    # 6. Persist holdings snapshot (shares, book cost, realized gains)
+    holdings_snapshot_path = snapshot_holdings(
+        storage=storage,
+        portfolio_id=portfolio_id,
+        proposals=proposals,
+        prices=prices,
+        portfolio_value=portfolio_value,
+        as_of=run_as_of,
+    )
+
     return RebalanceResult(
         as_of=as_of,
         portfolio_id=portfolio_id,
@@ -110,6 +122,7 @@ def rebalance_portfolio(
         sells=sells,
         estimated_turnover=round(turnover, 4),
         snapshot_path=snapshot_path,
+        holdings_snapshot_path=holdings_snapshot_path,
         proposals=proposals,
     )
 

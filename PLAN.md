@@ -22,8 +22,9 @@ Phase 5 progress notes (remove when phase completes):
 - Rebalance engine (`alpha rebalance`) implemented: reads latest target vs. prior weights, generates buy/sell trade proposals with share counts and values from latest prices, persists as `trade_proposals` snapshot.
 - Backtest runner (`alpha backtest`) implemented: walk-forward simulation over stored price data with in-memory scoring at each rebalance date, daily NAV tracking with weight drift, configurable frequency (weekly/monthly/quarterly), benchmark comparison.
 - Performance report (`alpha report`) implemented: reads backtest NAV series and computes total/annualized return, volatility, Sharpe, max drawdown, Calmar ratio, best/worst day, benchmark-relative metrics (excess return, tracking error, information ratio), persists as `performance_report` snapshot.
-- 43 new tests (9 rebalance, 15 backtest, 19 report). 207 total tests pass.
-- Next: benchmark-relative analytics (attribution), portfolio snapshot persistence improvements.
+- Portfolio snapshot persistence (`portfolio/state.py`) implemented: `apply_trades()` applies proposals using weighted-average book cost; `snapshot_holdings()` persists `holdings_snapshot_{portfolio_id}` dataset with shares, book cost, current price, market value, cost basis, unrealized gain, realized gain, and weight. Rebalance engine calls this automatically; `RebalanceResult` now includes `holdings_snapshot_path`.
+- 229 total tests pass (22 new holdings state tests).
+- Next: benchmark-relative analytics (attribution), HTML report output.
 
 ## Steps
 
