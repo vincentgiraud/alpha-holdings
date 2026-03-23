@@ -11,11 +11,10 @@ Implemented now:
 - Unit tests and BDD scenarios
 
 Partially implemented now:
-- CLI surface exists, but only `alpha --version` and `alpha check` are functional
+- `alpha refresh`, `alpha list-snapshots`, `alpha show-snapshot`, and `alpha score` are functional
 
 Planned next:
-- Provider abstractions and free adapters
-- Normalization/storage pipeline
+- Phase 3 expansion: richer universe rules and fundamentals-backed factor inputs
 - Portfolio construction, rebalance, backtest command workflows
 
 ## Quick Start
@@ -123,7 +122,7 @@ alpha refresh --universe seed_universe.csv --sources yahoo,edgar --output data/
 
 ### Score and Construct
 ```bash
-alpha score --date 2025-01-31 --factors value,quality,growth
+alpha score --date 2025-01-31
 alpha construct --date 2025-01-31 --profile fat_fire_10yr --constraints default
 ```
 

@@ -141,10 +141,50 @@ def show_snapshot(
 
 
 @app.command()
-def score(date: str = typer.Option(..., help="Score as-of date (YYYY-MM-DD)")):
-    """Compute fundamental scores."""
-    typer.echo(f"Scoring as of {date}...")
-    typer.secho("❌ Not yet implemented", fg=typer.colors.YELLOW)
+def score(date: str = typer.Option(..., help="Score as-of date prefix (YYYY-MM-DD)")):
+    """Compute equity scores from persisted snapshots."""
+    from alpha_holdings import config
+    from alpha_holdings.data.storage import build_storage_backend
+    from alpha_holdings.scoring import score_equities_from_snapshots
+
+    backend = build_storage_backend(
+        backend=config.STORAGE_BACKEND,
+        root_path=config.DATA_STORAGE_PATH,
+        database_path=_database_path_from_url(config.DATABASE_URL),
+        azure_account_url=config.AZURE_STORAGE_ACCOUNT_URL,
+        azure_container=config.AZURE_STORAGE_CONTAINER,
+        azure_prefix=config.AZURE_STORAGE_PREFIX,
+    )
+
+    try:
+        summary = score_equities_from_snapshots(
+            storage=backend,
+            as_of=date,
+            lookback_days=config.SCORE_LOOKBACK_DAYS,
+            min_avg_dollar_volume=config.UNIVERSE_MIN_AVG_DOLLAR_VOLUME,
+        )
+    except ValueError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"Scored {summary.securities_scored}/{summary.universe_size} symbols as of {summary.as_of}."
+    )
+    if summary.skipped:
+        typer.echo(f"Skipped: {', '.join(summary.skipped)}")
+    typer.echo(f"Snapshot written: {summary.snapshot_path}")
+    typer.echo(
+        summary.scores[
+            [
+                "rank",
+                "symbol",
+                "composite_score",
+                "factor_momentum",
+                "factor_low_volatility",
+                "factor_liquidity",
+            ]
+        ].to_string(index=False)
+    )
 
 
 @app.command()

@@ -14,18 +14,21 @@
 - Storage abstraction seam is implemented: local backend (Parquet snapshots + DuckDB metadata) and `azure_blob` backend contract placeholder.
 - `alpha refresh` now runs end-to-end: loads universe CSV, fetches prices with fallback source support, and persists raw + normalized snapshots via the storage backend.
 - Snapshot inspection commands are implemented: `alpha list-snapshots` and `alpha show-snapshot`.
-- 77 tests pass.
+- Phase 3 has started with a first scoring slice: liquidity-filtered universe build from snapshots and deterministic factor scoring.
+- `alpha score --date ...` is now functional and persists `equity_scores` snapshots.
+- 79 tests pass.
 
 ## Next (Top 3)
-1. Start Phase 3 universe design: seed constrained US + developed ex-US universe and enforce identifier/liquidity filters.
-2. Start Phase 3 scoring model: implement config-driven fundamental scoring with per-factor contribution outputs.
+1. Extend Phase 3 universe design: seed constrained US + developed ex-US universe fixture and add identifier/currency filters.
+2. Evolve the Phase 3 scoring model from price-based starter factors to fundamentals-backed factors while keeping contribution explainability.
 3. Complete Phase 6 parity hardening task: add provider contract tests for a mock paid adapter.
 
 ## Blocked
 - No hard blockers currently.
 
 ## Known Limitations
-- `alpha score`, `alpha construct`, and `alpha backtest` are scaffolded but not implemented yet.
+- `alpha score` currently uses a transparent price-derived starter factor set (momentum, low-volatility, liquidity) while fundamentals ingestion is expanded.
+- `alpha construct` and `alpha backtest` are scaffolded but not implemented yet.
 - `azure_blob` backend remains a contract seam and intentionally raises `NotImplementedError` until DevOps phase implementation.
 - Optional cleanup pending: migrate Pydantic `Config` usage to `ConfigDict` to remove deprecation warnings.
 
@@ -42,6 +45,8 @@
 - Added manual-test fixtures under `tests/fixtures/` for normal, duplicate, empty, and `symbol` alias universe inputs.
 - Added unit tests and BDD scenarios.
 - Updated `PLAN.md` with testing strategy and command workflows.
+- Added a first Phase 3 universe/scoring workflow from stored snapshots (`alpha score`) with per-factor contribution outputs and snapshot persistence.
+- Added tests for liquidity universe filtering and scoring snapshot registration (`tests/test_scoring.py`).
 
 ## Test Commands
 - All tests: `uv run pytest -q`

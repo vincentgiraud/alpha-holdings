@@ -37,6 +37,11 @@ LOG_FORMAT = os.getenv("LOG_FORMAT", "json")
 ANALYSIS_LOOKBACK_DAYS = int(os.getenv("ANALYSIS_LOOKBACK_DAYS", "252"))
 CONFIDENCE_LEVEL = float(os.getenv("CONFIDENCE_LEVEL", "0.95"))
 
+# Universe/scoring defaults
+UNIVERSE_LOOKBACK_DAYS = int(os.getenv("UNIVERSE_LOOKBACK_DAYS", "20"))
+UNIVERSE_MIN_AVG_DOLLAR_VOLUME = float(os.getenv("UNIVERSE_MIN_AVG_DOLLAR_VOLUME", "1000000"))
+SCORE_LOOKBACK_DAYS = int(os.getenv("SCORE_LOOKBACK_DAYS", "20"))
+
 
 def ensure_storage_paths():
     """Create storage directories if they don't exist."""

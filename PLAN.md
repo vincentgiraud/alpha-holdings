@@ -13,7 +13,7 @@ Build a Python-first research platform managed with uv, starting from free daily
 
 - Phase 1 (Bootstrap/contracts/profile/allocation/goal analytics): done
 - Phase 2 (Provider abstraction/adapters/normalization/storage): done
-- Phase 3 (Universe and scoring): not started
+- Phase 3 (Universe and scoring): in progress
 - Phase 4 (Construction/rebalance/backtest): not started
 - Phase 5 (Analytics workflows and full CLI surface): not started
 - Phase 6 (Upgrade-path hardening and final docs): in progress
@@ -24,6 +24,11 @@ Phase 2 progress notes:
 - `alpha refresh` is wired end-to-end through provider fetch, normalization output shaping, and storage persistence.
 - Snapshot discovery and inspection workflows are implemented via `alpha list-snapshots` and `alpha show-snapshot`.
 - Manual-test fixture CSV files were added for standard, duplicate, empty, and symbol-alias universe inputs.
+
+Phase 3 progress notes:
+- Snapshot-driven liquidity filtering is implemented to build a constrained working universe from persisted price datasets.
+- A first scoring slice is implemented and wired to CLI (`alpha score`) with transparent factor contributions (momentum, low-volatility, liquidity).
+- Scoring results are persisted as `equity_scores` snapshots for reproducible downstream workflows.
 
 ## Steps
 
