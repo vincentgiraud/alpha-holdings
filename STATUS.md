@@ -3,25 +3,35 @@
 ## Purpose
 
 - This file is the short-lived execution snapshot for handoffs.
-- It captures current state (`Now`), immediate priorities (`Next`), blockers, and recent completions.
-- Update it frequently during implementation work.
+- It captures current state (`Now`), upcoming work (checklist), blockers, and known limitations.
+- Update it frequently: **remove** tasks when done rather than marking them checked. Phase summaries go into `PLAN.md` progress notes.
 - It should summarize deltas from the roadmap in `PLAN.md`, not restate the full plan.
 
 ## Now
-- Phase 2 provider abstraction is complete.
-- Provider ABCs (`base.py`) and free adapter skeletons are implemented.
-- Canonical normalization layer is implemented for Yahoo/Stooq/EDGAR payload shapes.
-- Storage abstraction seam is implemented: local backend (Parquet snapshots + DuckDB metadata) and `azure_blob` backend contract placeholder.
-- `alpha refresh` now runs end-to-end: loads universe CSV, fetches prices with fallback source support, and persists raw + normalized snapshots via the storage backend.
-- Snapshot inspection commands are implemented: `alpha list-snapshots` and `alpha show-snapshot`.
-- Phase 3 has started with a first scoring slice: liquidity-filtered universe build from snapshots and deterministic factor scoring.
-- `alpha score --date ...` is now functional and persists `equity_scores` snapshots.
+- Phases 1 and 2 are complete. Phase 3 is in progress.
+- `alpha score --date ...` is functional: liquidity-filtered universe from snapshots, deterministic factor scoring (momentum, low-volatility, liquidity), and `equity_scores` snapshot persistence.
 - 79 tests pass.
 
-## Next (Top 3)
-1. Extend Phase 3 universe design: seed constrained US + developed ex-US universe fixture and add identifier/currency filters.
-2. Evolve the Phase 3 scoring model from price-based starter factors to fundamentals-backed factors while keeping contribution explainability.
-3. Complete Phase 6 parity hardening task: add provider contract tests for a mock paid adapter.
+## Upcoming Work
+
+### Phase 3 (in progress)
+- [ ] Seed constrained US + developed ex-US universe fixture (25 US large-cap + 10 ex-US names)
+- [ ] Add identifier mapping and currency normalization to universe design
+- [ ] Evolve scoring from price-based starter factors to fundamentals-backed factors
+- [ ] Add provider contract tests for a mock paid adapter (Phase 6 parity)
+
+### Phase 4
+- [ ] Implement benchmark-aware portfolio construction (`alpha construct`)
+- [ ] Add position size, sector/country deviation, turnover, liquidity, and min holdings constraints
+- [ ] Build rebalance engine (`alpha rebalance`)
+- [ ] Build historical backtest runner around point-in-time snapshots (`alpha backtest`)
+- [ ] Add explicit degraded-assumption warnings for free-source data in backtest
+
+### Phase 5
+- [ ] Complete CLI surface: `alpha construct`, `alpha rebalance`, `alpha backtest`, `alpha report`
+- [ ] Add portfolio analytics (returns, volatility, Sharpe, drawdown)
+- [ ] Add benchmark-relative analytics (tracking error, information ratio, attribution)
+- [ ] Add performance snapshot persistence
 
 ## Blocked
 - No hard blockers currently.
@@ -31,22 +41,6 @@
 - `alpha construct` and `alpha backtest` are scaffolded but not implemented yet.
 - `azure_blob` backend remains a contract seam and intentionally raises `NotImplementedError` until DevOps phase implementation.
 - Optional cleanup pending: migrate Pydantic `Config` usage to `ConfigDict` to remove deprecation warnings.
-
-## Done This Week
-- Bootstrapped uv-managed Python project and repo structure.
-- Added canonical domain contracts and investor profile models.
-- Implemented `ProfileToConstraints` and `AssetAllocator` logic.
-- Added goal-aware analytics module.
-- Added CLI/config skeleton and environment configuration.
-- Added canonical normalization helpers and tests for Yahoo/Stooq/EDGAR row normalization.
-- Added storage backend abstraction with a local backend (Parquet + DuckDB) and cloud-ready `azure_blob` seam.
-- Wired `alpha refresh` to the provider + normalization + storage path and added orchestration tests.
-- Added snapshot discovery/inspection commands (`alpha list-snapshots`, `alpha show-snapshot`).
-- Added manual-test fixtures under `tests/fixtures/` for normal, duplicate, empty, and `symbol` alias universe inputs.
-- Added unit tests and BDD scenarios.
-- Updated `PLAN.md` with testing strategy and command workflows.
-- Added a first Phase 3 universe/scoring workflow from stored snapshots (`alpha score`) with per-factor contribution outputs and snapshot persistence.
-- Added tests for liquidity universe filtering and scoring snapshot registration (`tests/test_scoring.py`).
 
 ## Test Commands
 - All tests: `uv run pytest -q`

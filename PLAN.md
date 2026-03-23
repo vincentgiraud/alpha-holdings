@@ -11,58 +11,51 @@ Build a Python-first research platform managed with uv, starting from free daily
 
 ## Phase Completion Snapshot
 
-- Phase 1 (Bootstrap/contracts/profile/allocation/goal analytics): done
-- Phase 2 (Provider abstraction/adapters/normalization/storage): done
-- Phase 3 (Universe and scoring): in progress
-- Phase 4 (Construction/rebalance/backtest): not started
-- Phase 5 (Analytics workflows and full CLI surface): not started
-- Phase 6 (Upgrade-path hardening and final docs): in progress
+- [x] Phase 1 (Bootstrap/contracts/profile/allocation/goal analytics): done
+- [x] Phase 2 (Provider abstraction/adapters/normalization/storage): done
+- [ ] Phase 3 (Universe and scoring): in progress
+- [ ] Phase 4 (Construction/rebalance/backtest): not started
+- [ ] Phase 5 (Analytics workflows and full CLI surface): not started
+- [ ] Phase 6 (Upgrade-path hardening and final docs): in progress
 
-Phase 2 progress notes:
-- Canonical normalization helpers for Yahoo/Stooq/EDGAR payload rows are implemented.
-- Storage abstraction seam is implemented with a local backend (parquet + DuckDB) and an `azure_blob` backend contract placeholder.
-- `alpha refresh` is wired end-to-end through provider fetch, normalization output shaping, and storage persistence.
-- Snapshot discovery and inspection workflows are implemented via `alpha list-snapshots` and `alpha show-snapshot`.
-- Manual-test fixture CSV files were added for standard, duplicate, empty, and symbol-alias universe inputs.
-
-Phase 3 progress notes:
+Phase 3 progress notes (remove when phase completes):
 - Snapshot-driven liquidity filtering is implemented to build a constrained working universe from persisted price datasets.
 - A first scoring slice is implemented and wired to CLI (`alpha score`) with transparent factor contributions (momentum, low-volatility, liquidity).
 - Scoring results are persisted as `equity_scores` snapshots for reproducible downstream workflows.
 
 ## Steps
 
-1. **Phase 1: Bootstrap.** Initialize the repository with uv-managed Python packaging, project metadata, lint/test tooling, a top-level README.md, and a .gitignore tuned for Python, uv, caches, notebooks, environment files, and local data artifacts.
+- [x] **1. Phase 1: Bootstrap.** Initialize the repository with uv-managed Python packaging, project metadata, lint/test tooling, a top-level README.md, and a .gitignore tuned for Python, uv, caches, notebooks, environment files, and local data artifacts.
 
-2. **Phase 1: Bootstrap.** Establish the package layout under src so data ingestion, normalization, storage, domain models, scoring, portfolio construction, rebalancing, backtesting, analytics, and CLI entry points are isolated from each other. Parallel with step 1.
+- [x] **2. Phase 1: Bootstrap.** Establish the package layout under src so data ingestion, normalization, storage, domain models, scoring, portfolio construction, rebalancing, backtesting, analytics, and CLI entry points are isolated from each other. Parallel with step 1.
 
-3. **Phase 1: Contracts.** Define canonical schemas for Security, IdentifierMap, PriceBar, CorporateAction, FundamentalSnapshot, BenchmarkConstituent, Holding, TargetWeight, TradeProposal, and PerformanceSnapshot. Add explicit metadata for source, as-of date, publish date, currency, and data quality flags. Depends on steps 1 and 2.
+- [x] **3. Phase 1: Contracts.** Define canonical schemas for Security, IdentifierMap, PriceBar, CorporateAction, FundamentalSnapshot, BenchmarkConstituent, Holding, TargetWeight, TradeProposal, and PerformanceSnapshot. Add explicit metadata for source, as-of date, publish date, currency, and data quality flags. Depends on steps 1 and 2.
 
-3a. **Phase 1: Investor profile.** Define an `InvestorProfile` model with fields: `fire_variant` (fat_fire | lean_fire | barista_fire | coast_fire | retirement_complement), `risk_appetite` (1–5 integer scale), `horizon_years` (integer), `withdrawal_pattern` (lump_sum | regular_drawdown | compound_only), `target_real_return_pct` (optional float), and `crypto_enabled` (bool, default false). Add a `ProfileToConstraints` resolver that maps these fields to concrete portfolio engine defaults: max single-name weight, sector deviation band, country deviation band, max annualized turnover, min holdings count, max portfolio volatility, max drawdown tolerance, rebalance cadence, and scoring factor holding-period bias. Depends on steps 1 and 2.
+- [x] **3a. Phase 1: Investor profile.** Define an `InvestorProfile` model with fields: `fire_variant` (fat_fire | lean_fire | barista_fire | coast_fire | retirement_complement), `risk_appetite` (1–5 integer scale), `horizon_years` (integer), `withdrawal_pattern` (lump_sum | regular_drawdown | compound_only), `target_real_return_pct` (optional float), and `crypto_enabled` (bool, default false). Add a `ProfileToConstraints` resolver that maps these fields to concrete portfolio engine defaults: max single-name weight, sector deviation band, country deviation band, max annualized turnover, min holdings count, max portfolio volatility, max drawdown tolerance, rebalance cadence, and scoring factor holding-period bias. Depends on steps 1 and 2.
 
-3c. **Phase 1: Asset class allocation.** Add an `AssetClass` enum (equity, bond, crypto) and an `AssetClassAllocation` model that holds target weight bands per sleeve. Implement an `AssetAllocator` that derives the top-level equity/bond/crypto split from `InvestorProfile` before any security selection occurs. Example mappings: fat_fire 20yr risk 4–5 → 85% equity / 12% bond / 3% crypto; lean_fire 10yr risk 3 → 80% equity / 20% bond / 0% crypto; retirement_complement 5yr risk 2 → 50% equity / 45% bond / 5% optional crypto. Crypto sleeve is only emitted when `crypto_enabled=true` and `risk_appetite >= 4`. Bond sleeve is always present and its weight floor rises as `horizon_years` decreases and `risk_appetite` decreases. Security selection (scoring model, ETF proxy for bonds, capped crypto ETF proxy) runs independently within each sleeve's weight band. Depends on step 3a.
+- [x] **3c. Phase 1: Asset class allocation.** Add an `AssetClass` enum (equity, bond, crypto) and an `AssetClassAllocation` model that holds target weight bands per sleeve. Implement an `AssetAllocator` that derives the top-level equity/bond/crypto split from `InvestorProfile` before any security selection occurs. Example mappings: fat_fire 20yr risk 4–5 → 85% equity / 12% bond / 3% crypto; lean_fire 10yr risk 3 → 80% equity / 20% bond / 0% crypto; retirement_complement 5yr risk 2 → 50% equity / 45% bond / 5% optional crypto. Crypto sleeve is only emitted when `crypto_enabled=true` and `risk_appetite >= 4`. Bond sleeve is always present and its weight floor rises as `horizon_years` decreases and `risk_appetite` decreases. Security selection (scoring model, ETF proxy for bonds, capped crypto ETF proxy) runs independently within each sleeve's weight band. Depends on step 3a.
 
-3b. **Phase 1: Goal analytics.** Extend the analytics module to include profile-aware reporting: probability of reaching a wealth target given the profile, sequence-of-returns risk summary for profiles near withdrawal, and safe withdrawal rate estimate. These are additive outputs alongside standard benchmark-relative analytics. Depends on step 3a.
+- [x] **3b. Phase 1: Goal analytics.** Extend the analytics module to include profile-aware reporting: probability of reaching a wealth target given the profile, sequence-of-returns risk summary for profiles near withdrawal, and safe withdrawal rate estimate. These are additive outputs alongside standard benchmark-relative analytics. Depends on step 3a.
 
-4. **Phase 2: Provider abstraction.** Implement provider interfaces for prices, fundamentals, reference data, classifications, FX, and benchmarks. The free-source adapters and later paid adapters must conform to the same contracts so scoring and portfolio code remain vendor-agnostic. Depends on step 3.
+- [x] **4. Phase 2: Provider abstraction.** Implement provider interfaces for prices, fundamentals, reference data, classifications, FX, and benchmarks. The free-source adapters and later paid adapters must conform to the same contracts so scoring and portfolio code remain vendor-agnostic. Depends on step 3.
 
-5. **Phase 2: Free-source adapters.** Plan initial adapters for Yahoo Finance and Stooq price history, SEC EDGAR and company filing ingestion for raw fundamentals, and curated static mappings for sectors, countries, exchanges, and benchmark proxies. Depends on step 4.
+- [x] **5. Phase 2: Free-source adapters.** Plan initial adapters for Yahoo Finance and Stooq price history, SEC EDGAR and company filing ingestion for raw fundamentals, and curated static mappings for sectors, countries, exchanges, and benchmark proxies. Depends on step 4.
 
-6. **Phase 2: Normalization and storage.** Add canonical normalization rules and local storage that combine relational metadata with parquet snapshots for reproducible research runs. Store raw payloads separately from normalized tables so vendor swaps and audit/debug flows remain possible. Depends on steps 4 and 5.
+- [x] **6. Phase 2: Normalization and storage.** Add canonical normalization rules and local storage that combine relational metadata with parquet snapshots for reproducible research runs. Store raw payloads separately from normalized tables so vendor swaps and audit/debug flows remain possible. Depends on steps 4 and 5.
 
-7. **Phase 3: Universe design.** Start with a deliberately constrained free-data universe: US large-cap plus a curated developed ex-US subset, rather than full developed markets immediately. Add identifier mapping, currency normalization, liquidity filters, and benchmark-proxy membership rules. Depends on steps 3 through 6.
+- [ ] **7. Phase 3: Universe design.** Start with a deliberately constrained free-data universe: US large-cap plus a curated developed ex-US subset, rather than full developed markets immediately. Add identifier mapping, currency normalization, liquidity filters, and benchmark-proxy membership rules. Depends on steps 3 through 6.
 
-8. **Phase 3: Scoring model.** Implement a transparent, config-driven fundamental score using only factors that can be supported credibly with free inputs at first, and record per-security factor contributions to make later vendor comparisons measurable. Depends on steps 5 through 7.
+- [ ] **8. Phase 3: Scoring model.** Implement a transparent, config-driven fundamental score using only factors that can be supported credibly with free inputs at first, and record per-security factor contributions to make later vendor comparisons measurable. Depends on steps 5 through 7.
 
-9. **Phase 4: Portfolio engine.** Add benchmark-aware portfolio construction with ETF-like stability controls: max position size, sector and country deviation bands, turnover limits, liquidity rules, and minimum holdings. Depends on step 8.
+- [ ] **9. Phase 4: Portfolio engine.** Add benchmark-aware portfolio construction with ETF-like stability controls: max position size, sector and country deviation bands, turnover limits, liquidity rules, and minimum holdings. Depends on step 8.
 
-10. **Phase 4: Rebalancing and backtesting.** Build the rebalance engine and historical runner around point-in-time snapshots where available, and add explicit warnings when free-source data forces weaker assumptions. Depends on steps 6 through 9.
+- [ ] **10. Phase 4: Rebalancing and backtesting.** Build the rebalance engine and historical runner around point-in-time snapshots where available, and add explicit warnings when free-source data forces weaker assumptions. Depends on steps 6 through 9.
 
-11. **Phase 5: Analytics and operator surface.** Add CLI workflows for refresh, normalize, score, construct, rebalance, backtest, and report, along with portfolio, benchmark, and attribution analytics. Depends on steps 6 through 10.
+- [ ] **11. Phase 5: Analytics and operator surface.** Add CLI workflows for refresh, normalize, score, construct, rebalance, backtest, and report, along with portfolio, benchmark, and attribution analytics. Depends on steps 6 through 10.
 
-12. **Phase 6: Upgrade path hardening.** Add tests focused on contract compliance, provider parity, normalization invariants, and benchmark-relative risk controls so a future paid vendor can be introduced with adapter-level validation rather than system-wide rewrites. Depends on steps 4 through 11.
+- [ ] **12. Phase 6: Upgrade path hardening.** Add tests focused on contract compliance, provider parity, normalization invariants, and benchmark-relative risk controls so a future paid vendor can be introduced with adapter-level validation rather than system-wide rewrites. Depends on steps 4 through 11.
 
-13. **Phase 6: Documentation.** Document the free-data limitations, upgrade seams, supported workflows, and the exact process for adding a paid provider implementation later. Depends on all prior steps.
+- [ ] **13. Phase 6: Documentation.** Document the free-data limitations, upgrade seams, supported workflows, and the exact process for adding a paid provider implementation later. Depends on all prior steps.
 
 ## Verification
 
