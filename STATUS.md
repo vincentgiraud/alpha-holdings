@@ -8,35 +8,34 @@
 - It should summarize deltas from the roadmap in `PLAN.md`, not restate the full plan.
 
 ## Now
-- Phases 1–2 complete. Phase 3 complete. Phase 4 in progress. Phase 6 hardening ongoing.
-- `alpha construct` implemented: score-proportional weights with position cap, min holdings, country deviation, turnover blending, and snapshot persistence.
-- 164 tests pass (including 16 construction tests, 6 BDD scenarios). Lint and format clean.
-- Next: implement rebalance engine (`alpha rebalance`) and backtest runner (`alpha backtest`).
+- Phases 1–4 complete. Phase 5 in progress. Phase 6 hardening ongoing.
+- `alpha construct`, `alpha rebalance`, `alpha backtest`, `alpha report` all implemented.
+- 207 tests pass (77% code coverage). Lint and format clean.
+- Next: portfolio snapshot persistence, benchmark-relative analytics, additional hardening tests.
 
 ## Upcoming Work
 
-### Phase 3 (in progress)
-
-### Phase 4
-- [ ] Build rebalance engine (`alpha rebalance`)
-- [ ] Build historical backtest runner around point-in-time snapshots (`alpha backtest`)
-- [ ] Add explicit degraded-assumption warnings for free-source data in backtest
-- [ ] Add sector deviation enforcement once sector metadata is in seed universe
-
 ### Phase 5
-- [ ] Complete CLI surface: `alpha rebalance`, `alpha backtest`, `alpha report`
-- [ ] Add portfolio analytics (returns, volatility, Sharpe, drawdown)
-- [ ] Add benchmark-relative analytics (tracking error, information ratio, attribution)
-- [ ] Add performance snapshot persistence
+- [ ] Improve portfolio snapshot persistence (holdings state tracking)
+- [ ] Add benchmark-relative analytics (factor attribution)
+- [ ] Extend `alpha report` with HTML output
+- [ ] Add portfolio history visualization (NAV, weights over time)
+
+### Phase 6
+- [ ] Contract compliance tests for multi-vendor scenarios
+- [ ] Upgrade-path validation (mock paid provider)
+- [ ] Final documentation and README updates
+- [ ] Release 0.1.0 checklist
 
 ## Blocked
 - No hard blockers currently.
 
 ## Known Limitations
 - EDGAR fundamentals coverage is US-centric, so mixed universes still rely on graceful degradation for ex-US symbols without fundamentals snapshots.
-- `alpha backtest` is scaffolded but not implemented yet.
+- Backtest uses in-memory scoring without fundamentals factors (free-source data degradation). Financial snapshots added in future enhancement.
 - Sector deviation enforcement deferred until sector metadata is added to seed universe.
 - `azure_blob` backend remains a contract seam and intentionally raises `NotImplementedError` until DevOps phase implementation.
+- Portfolio holdings state (book cost, realized gains) not yet tracked; current system assumes paper trades from target weights.
 - Optional cleanup pending: migrate Pydantic `Config` usage to `ConfigDict` to remove deprecation warnings.
 
 ## Test Commands

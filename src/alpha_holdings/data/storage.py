@@ -154,13 +154,13 @@ class LocalStorageBackend:
         with duckdb.connect(str(self.database_path)) as con:
             if dataset_filter:
                 rows = con.execute(
-                    "SELECT dataset, as_of, row_count, metadata_json, created_at "
+                    "SELECT dataset, as_of, row_count, metadata_json, created_at, snapshot_path "
                     "FROM snapshots WHERE dataset = ? ORDER BY as_of DESC",
                     [_slug(dataset_filter)],
                 ).fetchall()
             else:
                 rows = con.execute(
-                    "SELECT dataset, as_of, row_count, metadata_json, created_at "
+                    "SELECT dataset, as_of, row_count, metadata_json, created_at, snapshot_path "
                     "FROM snapshots ORDER BY dataset, as_of DESC"
                 ).fetchall()
         return [
@@ -170,6 +170,7 @@ class LocalStorageBackend:
                 "row_count": r[2],
                 "metadata": json.loads(r[3]) if r[3] else {},
                 "created_at": r[4],
+                "snapshot_path": r[5],
             }
             for r in rows
         ]

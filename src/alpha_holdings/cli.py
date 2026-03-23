@@ -235,13 +235,142 @@ def construct(date: str = typer.Option(..., help="Construction date (YYYY-MM-DD)
 
 
 @app.command()
+def rebalance(
+    date: str = typer.Option(..., help="Rebalance as-of date (YYYY-MM-DD)"),
+    portfolio_value: float = typer.Option(
+        1_000_000.0, help="Total portfolio value for share calculation"
+    ),
+):
+    """Generate trade proposals vs. current holdings."""
+    from alpha_holdings import config
+    from alpha_holdings.data.storage import build_storage_backend
+    from alpha_holdings.portfolio import rebalance_portfolio
+
+    backend = build_storage_backend(
+        backend=config.STORAGE_BACKEND,
+        root_path=config.DATA_STORAGE_PATH,
+        database_path=_database_path_from_url(config.DATABASE_URL),
+        azure_account_url=config.AZURE_STORAGE_ACCOUNT_URL,
+        azure_container=config.AZURE_STORAGE_CONTAINER,
+        azure_prefix=config.AZURE_STORAGE_PREFIX,
+    )
+
+    try:
+        result = rebalance_portfolio(
+            storage=backend,
+            as_of=date,
+            portfolio_value=portfolio_value,
+            seed_universe_path=config.UNIVERSE_SEED_PATH,
+        )
+    except ValueError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from exc
+
+    typer.echo(f"Rebalance for '{result.portfolio_id}' as of {result.as_of}")
+    typer.echo(f"  Portfolio value: ${result.portfolio_value:,.2f}")
+    typer.echo(f"  Trades:     {result.trades_count} ({result.buys} buys, {result.sells} sells)")
+    typer.echo(f"  Turnover:   {result.estimated_turnover:.2%}")
+    typer.echo(f"  Snapshot:   {result.snapshot_path}")
+    if not result.proposals.empty:
+        typer.echo("")
+        display_cols = [
+            "symbol",
+            "side",
+            "shares",
+            "price_estimate",
+            "estimated_value",
+            "weight_change",
+        ]
+        typer.echo(result.proposals[display_cols].to_string(index=False))
+
+
+@app.command()
 def backtest(
     start_date: str = typer.Option(..., help="Backtest start (YYYY-MM-DD)"),
     end_date: str = typer.Option(..., help="Backtest end (YYYY-MM-DD)"),
+    rebalance_freq: str = typer.Option(
+        "monthly", help="Rebalance frequency (weekly, monthly, quarterly)"
+    ),
+    benchmark: str = typer.Option("SPY", help="Benchmark symbol"),
 ):
-    """Run historical backtest."""
-    typer.echo(f"Backtesting from {start_date} to {end_date}...")
-    typer.secho("❌ Not yet implemented", fg=typer.colors.YELLOW)
+    """Run historical walk-forward backtest."""
+    from alpha_holdings import config
+    from alpha_holdings.backtest import run_backtest
+    from alpha_holdings.data.storage import build_storage_backend
+
+    backend = build_storage_backend(
+        backend=config.STORAGE_BACKEND,
+        root_path=config.DATA_STORAGE_PATH,
+        database_path=_database_path_from_url(config.DATABASE_URL),
+        azure_account_url=config.AZURE_STORAGE_ACCOUNT_URL,
+        azure_container=config.AZURE_STORAGE_CONTAINER,
+        azure_prefix=config.AZURE_STORAGE_PREFIX,
+    )
+
+    try:
+        result = run_backtest(
+            storage=backend,
+            start_date=start_date,
+            end_date=end_date,
+            rebalance_freq=rebalance_freq,
+            seed_universe_path=config.UNIVERSE_SEED_PATH,
+            benchmark_symbol=benchmark,
+            lookback_days=config.SCORE_LOOKBACK_DAYS,
+        )
+    except ValueError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from exc
+
+    typer.echo(f"Backtest: {result.start_date} → {result.end_date}")
+    typer.echo(f"  Rebalances:       {result.rebalance_count}")
+    typer.echo(f"  Total Return:     {result.total_return:.4%}")
+    typer.echo(f"  Annualized:       {result.annualized_return:.4%}")
+    typer.echo(f"  Volatility:       {result.volatility:.4%}")
+    typer.echo(f"  Sharpe Ratio:     {result.sharpe_ratio:.4f}")
+    typer.echo(f"  Max Drawdown:     {result.max_drawdown:.4%}")
+    if result.benchmark_total_return is not None:
+        typer.echo(f"  Benchmark Return: {result.benchmark_total_return:.4%}")
+    typer.echo(f"  Snapshot:         {result.snapshot_path}")
+    if result.warnings:
+        typer.echo("")
+        for w in result.warnings:
+            typer.secho(f"  ⚠ {w}", fg=typer.colors.YELLOW)
+
+
+@app.command()
+def report(
+    benchmark: str = typer.Option("SPY", help="Benchmark symbol"),
+    risk_free_rate: float = typer.Option(0.04, help="Annual risk-free rate"),
+):
+    """Generate performance report from latest backtest results."""
+    from alpha_holdings import config
+    from alpha_holdings.analytics import generate_report
+    from alpha_holdings.data.storage import build_storage_backend
+
+    backend = build_storage_backend(
+        backend=config.STORAGE_BACKEND,
+        root_path=config.DATA_STORAGE_PATH,
+        database_path=_database_path_from_url(config.DATABASE_URL),
+        azure_account_url=config.AZURE_STORAGE_ACCOUNT_URL,
+        azure_container=config.AZURE_STORAGE_CONTAINER,
+        azure_prefix=config.AZURE_STORAGE_PREFIX,
+    )
+
+    try:
+        rpt = generate_report(
+            storage=backend,
+            risk_free_rate=risk_free_rate,
+            benchmark_symbol=benchmark,
+        )
+    except ValueError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from exc
+
+    typer.echo(f"Performance Report: {rpt.start_date} → {rpt.end_date}")
+    typer.echo(f"  Portfolio: {rpt.portfolio_id}")
+    typer.echo(f"  Snapshot:  {rpt.snapshot_path}")
+    typer.echo("")
+    typer.echo(rpt.summary.to_string(index=False))
 
 
 def _parse_date_or_default(value: str | None, *, default: date) -> date:

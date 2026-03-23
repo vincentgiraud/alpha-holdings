@@ -14,15 +14,16 @@ Build a Python-first research platform managed with uv, starting from free daily
 - [x] Phase 1 (Bootstrap/contracts/profile/allocation/goal analytics): done
 - [x] Phase 2 (Provider abstraction/adapters/normalization/storage): done
 - [x] Phase 3 (Universe and scoring): done
-- [ ] Phase 4 (Construction/rebalance/backtest): in progress
-- [ ] Phase 5 (Analytics workflows and full CLI surface): not started
+- [x] Phase 4 (Construction/rebalance/backtest): done
+- [ ] Phase 5 (Analytics workflows and full CLI surface): in progress
 - [ ] Phase 6 (Upgrade-path hardening and final docs): in progress
 
-Phase 4 progress notes (remove when phase completes):
-- Portfolio construction engine implemented (`alpha construct` CLI). Score-proportional weight assignment with iterative position cap, min holdings enforcement, country deviation bands (structural), turnover blending vs. prior weights, and snapshot persistence as `portfolio_weights`.
-- 16 new construction tests covering: basic construction, position cap, min holdings, turnover, output schema, and profile-driven constraints.
-- Sector deviation enforcement deferred until sector metadata is added to seed universe.
-- Next: implement rebalance engine and backtest runner.
+Phase 5 progress notes (remove when phase completes):
+- Rebalance engine (`alpha rebalance`) implemented: reads latest target vs. prior weights, generates buy/sell trade proposals with share counts and values from latest prices, persists as `trade_proposals` snapshot.
+- Backtest runner (`alpha backtest`) implemented: walk-forward simulation over stored price data with in-memory scoring at each rebalance date, daily NAV tracking with weight drift, configurable frequency (weekly/monthly/quarterly), benchmark comparison.
+- Performance report (`alpha report`) implemented: reads backtest NAV series and computes total/annualized return, volatility, Sharpe, max drawdown, Calmar ratio, best/worst day, benchmark-relative metrics (excess return, tracking error, information ratio), persists as `performance_report` snapshot.
+- 43 new tests (9 rebalance, 15 backtest, 19 report). 207 total tests pass.
+- Next: benchmark-relative analytics (attribution), portfolio snapshot persistence improvements.
 
 ## Steps
 
@@ -50,7 +51,7 @@ Phase 4 progress notes (remove when phase completes):
 
 - [x] **9. Phase 4: Portfolio engine.** Add benchmark-aware portfolio construction with ETF-like stability controls: max position size, sector and country deviation bands, turnover limits, liquidity rules, and minimum holdings. Depends on step 8.
 
-- [ ] **10. Phase 4: Rebalancing and backtesting.** Build the rebalance engine and historical runner around point-in-time snapshots where available, and add explicit warnings when free-source data forces weaker assumptions. Depends on steps 6 through 9.
+- [x] **10. Phase 4: Rebalancing and backtesting.** Build the rebalance engine and historical runner around point-in-time snapshots where available, and add explicit warnings when free-source data forces weaker assumptions. Depends on steps 6 through 9.
 
 - [ ] **11. Phase 5: Analytics and operator surface.** Add CLI workflows for refresh, normalize, score, construct, rebalance, backtest, and report, along with portfolio, benchmark, and attribution analytics. Depends on steps 6 through 10.
 
