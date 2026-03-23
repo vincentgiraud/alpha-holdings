@@ -35,6 +35,8 @@ def score_equities_from_snapshots(
     as_of: str,
     lookback_days: int,
     min_avg_dollar_volume: float,
+    seed_universe_path: Path | None = None,
+    base_currency: str = "USD",
 ) -> ScoreSummary:
     """Score all liquid equities discovered in snapshots for an as-of date prefix."""
     universe = build_liquid_universe_from_snapshots(
@@ -42,6 +44,8 @@ def score_equities_from_snapshots(
         as_of=as_of,
         lookback_days=lookback_days,
         min_avg_dollar_volume=min_avg_dollar_volume,
+        seed_universe_path=seed_universe_path,
+        base_currency=base_currency,
     )
     if not universe.symbols:
         raise ValueError(f"No liquid symbols available for as_of={as_of!r}.")

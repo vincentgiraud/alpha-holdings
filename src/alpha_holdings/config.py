@@ -41,6 +41,9 @@ CONFIDENCE_LEVEL = float(os.getenv("CONFIDENCE_LEVEL", "0.95"))
 UNIVERSE_LOOKBACK_DAYS = int(os.getenv("UNIVERSE_LOOKBACK_DAYS", "20"))
 UNIVERSE_MIN_AVG_DOLLAR_VOLUME = float(os.getenv("UNIVERSE_MIN_AVG_DOLLAR_VOLUME", "1000000"))
 SCORE_LOOKBACK_DAYS = int(os.getenv("SCORE_LOOKBACK_DAYS", "20"))
+_seed_path_raw = os.getenv("UNIVERSE_SEED_PATH")
+UNIVERSE_SEED_PATH: Path | None = Path(_seed_path_raw) if _seed_path_raw else None
+UNIVERSE_BASE_CURRENCY = os.getenv("UNIVERSE_BASE_CURRENCY", "USD")
 
 
 def ensure_storage_paths():

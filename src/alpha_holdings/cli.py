@@ -162,6 +162,8 @@ def score(date: str = typer.Option(..., help="Score as-of date prefix (YYYY-MM-D
             as_of=date,
             lookback_days=config.SCORE_LOOKBACK_DAYS,
             min_avg_dollar_volume=config.UNIVERSE_MIN_AVG_DOLLAR_VOLUME,
+            seed_universe_path=config.UNIVERSE_SEED_PATH,
+            base_currency=config.UNIVERSE_BASE_CURRENCY,
         )
     except ValueError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
