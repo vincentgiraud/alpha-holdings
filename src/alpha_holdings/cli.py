@@ -35,7 +35,9 @@ def check():
 @app.command()
 def refresh(
     universe: str = typer.Option(..., help="Path to universe CSV"),
-    start_date: str | None = typer.Option(None, help="Start date (YYYY-MM-DD). Default: 90 days ago"),
+    start_date: str | None = typer.Option(
+        None, help="Start date (YYYY-MM-DD). Default: 90 days ago"
+    ),
     end_date: str | None = typer.Option(None, help="End date (YYYY-MM-DD). Default: today"),
 ):
     """Refresh data from free sources."""
@@ -111,7 +113,9 @@ def list_snapshots(
 @app.command(name="show-snapshot")
 def show_snapshot(
     dataset: str = typer.Option(..., help="Dataset name (e.g. 'prices_aapl')"),
-    as_of: str = typer.Option(..., help="As-of datetime prefix (e.g. '2026-03-23' or full UTC stamp)"),
+    as_of: str = typer.Option(
+        ..., help="As-of datetime prefix (e.g. '2026-03-23' or full UTC stamp)"
+    ),
     limit: int = typer.Option(20, help="Maximum rows to display"),
 ):
     """Display contents of a snapshot."""
@@ -131,7 +135,7 @@ def show_snapshot(
         df = backend.read_snapshot(dataset=dataset, as_of=as_of)
     except FileNotFoundError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from exc
 
     total = len(df)
     typer.echo(f"Snapshot: dataset={dataset!r}  rows={total}")
@@ -167,7 +171,7 @@ def score(date: str = typer.Option(..., help="Score as-of date prefix (YYYY-MM-D
         )
     except ValueError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from exc
 
     typer.echo(
         f"Scored {summary.securities_scored}/{summary.universe_size} symbols as of {summary.as_of}."
@@ -197,8 +201,10 @@ def construct(date: str = typer.Option(..., help="Construction date (YYYY-MM-DD)
 
 
 @app.command()
-def backtest(start_date: str = typer.Option(..., help="Backtest start (YYYY-MM-DD)"),
-             end_date: str = typer.Option(..., help="Backtest end (YYYY-MM-DD)")):
+def backtest(
+    start_date: str = typer.Option(..., help="Backtest start (YYYY-MM-DD)"),
+    end_date: str = typer.Option(..., help="Backtest end (YYYY-MM-DD)"),
+):
     """Run historical backtest."""
     typer.echo(f"Backtesting from {start_date} to {end_date}...")
     typer.secho("❌ Not yet implemented", fg=typer.colors.YELLOW)
@@ -213,7 +219,7 @@ def _parse_date_or_default(value: str | None, *, default: date) -> date:
 def _database_path_from_url(database_url: str) -> Path:
     prefix = "duckdb:///"
     if database_url.startswith(prefix):
-        return Path(database_url[len(prefix):])
+        return Path(database_url[len(prefix) :])
     return Path(database_url)
 
 

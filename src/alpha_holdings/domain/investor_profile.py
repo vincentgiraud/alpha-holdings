@@ -5,13 +5,12 @@ The ProfileToConstraints resolver maps profiles to concrete portfolio engine def
 """
 
 from decimal import Decimal
-from enum import Enum
-from typing import Optional
+from enum import StrEnum
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 
-class FireVariant(str, Enum):
+class FireVariant(StrEnum):
     """FIRE (Financial Independence, Retire Early) variants."""
 
     FAT_FIRE = "fat_fire"  # High spending target, aggressive returns needed
@@ -21,7 +20,7 @@ class FireVariant(str, Enum):
     RETIREMENT_COMPLEMENT = "retirement_complement"  # Supplement existing retirement income
 
 
-class WithdrawalPattern(str, Enum):
+class WithdrawalPattern(StrEnum):
     """Portfolio withdrawal/spending pattern."""
 
     LUMP_SUM = "lump_sum"  # Single large withdrawal at target date
@@ -29,7 +28,7 @@ class WithdrawalPattern(str, Enum):
     COMPOUND_ONLY = "compound_only"  # No withdrawals; accumulation phase only
 
 
-class AssetClass(str, Enum):
+class AssetClass(StrEnum):
     """Top-level asset classes for multi-asset allocation."""
 
     EQUITY = "equity"
@@ -47,12 +46,18 @@ class InvestorProfile(BaseModel):
 
     profile_id: str = Field(..., description="Unique identifier for this profile")
     fire_variant: FireVariant = Field(..., description="FIRE variant / goal type")
-    risk_appetite: int = Field(..., description="Risk appetite on 1-5 scale (1=very conservative, 5=very aggressive)")
-    horizon_years: int = Field(..., description="Time horizon until first withdrawal or target date (years)")
+    risk_appetite: int = Field(
+        ..., description="Risk appetite on 1-5 scale (1=very conservative, 5=very aggressive)"
+    )
+    horizon_years: int = Field(
+        ..., description="Time horizon until first withdrawal or target date (years)"
+    )
     withdrawal_pattern: WithdrawalPattern = Field(..., description="How portfolio will be accessed")
-    target_real_return_pct: Optional[float] = Field(None, description="Annual real (inflation-adjusted) return target (%)")
+    target_real_return_pct: float | None = Field(
+        None, description="Annual real (inflation-adjusted) return target (%)"
+    )
     crypto_enabled: bool = Field(default=False, description="Whether crypto sleeve is permitted")
-    name: Optional[str] = Field(None, description="Human-readable profile name")
+    name: str | None = Field(None, description="Human-readable profile name")
 
     @field_validator("risk_appetite")
     @classmethod
@@ -70,8 +75,7 @@ class InvestorProfile(BaseModel):
             raise ValueError("horizon_years must be positive")
         return v
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 class AssetClassAllocation(BaseModel):
@@ -90,39 +94,65 @@ class AssetClassAllocation(BaseModel):
             raise ValueError("Weights must be between 0 and 1")
         return v
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    @field_serializer("min_weight", "target_weight", "max_weight")
+    def serialize_decimal_fields(self, value: Decimal) -> str:
+        return str(value)
 
 
 class PortfolioConstraints(BaseModel):
     """Concrete portfolio construction constraints resolved from InvestorProfile."""
 
     profile_id: str = Field(..., description="Source profile ID")
-    max_single_name_weight: Decimal = Field(..., description="Max weight for any single security (0.0 to 1.0)")
-    sector_deviation_band: Decimal = Field(..., description="±sector deviation vs. benchmark (e.g., 0.05 = ±5pp)")
-    country_deviation_band: Decimal = Field(..., description="±country deviation vs. benchmark (e.g., 0.05 = ±5pp)")
+    max_single_name_weight: Decimal = Field(
+        ..., description="Max weight for any single security (0.0 to 1.0)"
+    )
+    sector_deviation_band: Decimal = Field(
+        ..., description="±sector deviation vs. benchmark (e.g., 0.05 = ±5pp)"
+    )
+    country_deviation_band: Decimal = Field(
+        ..., description="±country deviation vs. benchmark (e.g., 0.05 = ±5pp)"
+    )
     max_annual_turnover: Decimal = Field(..., description="Annual turnover cap (e.g., 0.50 = 50%)")
     min_holdings_count: int = Field(..., description="Minimum number of holdings in portfolio")
-    max_portfolio_volatility: Optional[Decimal] = Field(None, description="Target portfolio volatility (std dev)")
-    max_drawdown_tolerance: Optional[Decimal] = Field(None, description="Maximum acceptable drawdown")
-    rebalance_cadence: str = Field(default="monthly", description="Rebalance frequency (daily, weekly, monthly, quarterly)")
-    scoring_factor_holding_period_bias: Optional[str] = Field(
+    max_portfolio_volatility: Decimal | None = Field(
+        None, description="Target portfolio volatility (std dev)"
+    )
+    max_drawdown_tolerance: Decimal | None = Field(
+        None, description="Maximum acceptable drawdown"
+    )
+    rebalance_cadence: str = Field(
+        default="monthly", description="Rebalance frequency (daily, weekly, monthly, quarterly)"
+    )
+    scoring_factor_holding_period_bias: str | None = Field(
         None, description="Bias score toward long-term or short-term factors"
     )
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    @field_serializer(
+        "max_single_name_weight",
+        "sector_deviation_band",
+        "country_deviation_band",
+        "max_annual_turnover",
+        "max_portfolio_volatility",
+        "max_drawdown_tolerance",
+    )
+    def serialize_decimal_fields(self, value: Decimal | None) -> str | None:
+        return None if value is None else str(value)
 
 
 class AssetAllocatorResult(BaseModel):
     """Output of AssetAllocator: sleeve weight bands for construction."""
 
     profile_id: str = Field(..., description="Source profile ID")
-    asset_classes: list[AssetClassAllocation] = Field(..., description="Allocation bands per asset class")
-    description: Optional[str] = Field(None, description="Allocation rationale")
+    asset_classes: list[AssetClassAllocation] = Field(
+        ..., description="Allocation bands per asset class"
+    )
+    description: str | None = Field(None, description="Allocation rationale")
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 class ProfileToConstraints:
@@ -178,7 +208,8 @@ class ProfileToConstraints:
 
         # Tighten constraints for retirement-complement and near withdrawal
         if profile.fire_variant == FireVariant.RETIREMENT_COMPLEMENT or (
-            profile.withdrawal_pattern == WithdrawalPattern.REGULAR_DRAWDOWN and profile.horizon_years < 5
+            profile.withdrawal_pattern == WithdrawalPattern.REGULAR_DRAWDOWN
+            and profile.horizon_years < 5
         ):
             max_dd = Decimal("0.10")  # 10% max drawdown
             min_holdings = 50

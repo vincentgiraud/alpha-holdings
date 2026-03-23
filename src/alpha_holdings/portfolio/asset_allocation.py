@@ -15,7 +15,6 @@ from alpha_holdings.domain.investor_profile import (
     AssetClassAllocation,
     FireVariant,
     InvestorProfile,
-    WithdrawalPattern,
 )
 
 
@@ -23,9 +22,9 @@ class AssetAllocator:
     """Derives target equity/bond/crypto allocation bands from InvestorProfile.
 
     Allocation examples from the plan:
-      - fat_fire 20yr risk 4–5 → 85% equity / 12% bond / 3% crypto
-      - lean_fire 10yr risk 3 → 80% equity / 20% bond / 0% crypto
-      - retirement_complement 5yr risk 2 → 50% equity / 45% bond / 5% optional crypto
+    - fat_fire 20yr risk 4-5 -> 85% equity / 12% bond / 3% crypto
+    - lean_fire 10yr risk 3 -> 80% equity / 20% bond / 0% crypto
+    - retirement_complement 5yr risk 2 -> 50% equity / 45% bond / 5% optional crypto
 
     Bond sleeve is always present. Crypto is opt-in only when crypto_enabled=true
     and risk_appetite >= 4.
@@ -85,7 +84,9 @@ class AssetAllocator:
             f"equity {equity_target:.1%} | bond {bond_target:.1%} | crypto {crypto_target:.1%}"
         )
 
-        return AssetAllocatorResult(profile_id=profile.profile_id, asset_classes=allocations, description=description)
+        return AssetAllocatorResult(
+            profile_id=profile.profile_id, asset_classes=allocations, description=description
+        )
 
     @staticmethod
     def _compute_sleeve_targets(profile: InvestorProfile) -> tuple[Decimal, Decimal, Decimal]:

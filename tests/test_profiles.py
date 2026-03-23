@@ -1,12 +1,8 @@
 """Tests for investor profile and portfolio constraints."""
 
-import pytest
 from decimal import Decimal
 
-from alpha_holdings.domain import (
-    ProfileToConstraints,
-    FireVariant,
-)
+from alpha_holdings.domain import ProfileToConstraints
 
 
 class TestProfileToConstraints:

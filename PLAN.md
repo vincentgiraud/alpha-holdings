@@ -20,8 +20,10 @@ Build a Python-first research platform managed with uv, starting from free daily
 
 Phase 3 progress notes (remove when phase completes):
 - Snapshot-driven liquidity filtering is implemented to build a constrained working universe from persisted price datasets.
+- Seeded universe fixture (25 US large-cap + 10 developed ex-US) with identifier mapping (ISIN), currency normalization, and benchmark proxy assignments (SPY for US, EXU for developed ex-US).
 - A first scoring slice is implemented and wired to CLI (`alpha score`) with transparent factor contributions (momentum, low-volatility, liquidity).
 - Scoring results are persisted as `equity_scores` snapshots for reproducible downstream workflows.
+- Next: evolve scoring to fundamentals-backed factors and add provider contract tests for mock paid adapter.
 
 ## Steps
 
@@ -43,7 +45,7 @@ Phase 3 progress notes (remove when phase completes):
 
 - [x] **6. Phase 2: Normalization and storage.** Add canonical normalization rules and local storage that combine relational metadata with parquet snapshots for reproducible research runs. Store raw payloads separately from normalized tables so vendor swaps and audit/debug flows remain possible. Depends on steps 4 and 5.
 
-- [ ] **7. Phase 3: Universe design.** Start with a deliberately constrained free-data universe: US large-cap plus a curated developed ex-US subset, rather than full developed markets immediately. Add identifier mapping, currency normalization, liquidity filters, and benchmark-proxy membership rules. Depends on steps 3 through 6.
+- [x] **7. Phase 3: Universe design.** Start with a deliberately constrained free-data universe: US large-cap plus a curated developed ex-US subset, rather than full developed markets immediately. Add identifier mapping, currency normalization, liquidity filters, and benchmark-proxy membership rules. Depends on steps 3 through 6.
 
 - [ ] **8. Phase 3: Scoring model.** Implement a transparent, config-driven fundamental score using only factors that can be supported credibly with free inputs at first, and record per-security factor contributions to make later vendor comparisons measurable. Depends on steps 5 through 7.
 

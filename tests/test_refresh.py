@@ -1,6 +1,6 @@
 """Tests for refresh orchestration and universe loading."""
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -17,12 +17,13 @@ class _StubProvider:
         self.should_fail = should_fail
 
     def get_prices(self, ticker, start, end, *, adjusted=True):
+        _ = (start, end, adjusted)
         if self.should_fail:
             raise RuntimeError("provider failure")
         return [
             PriceBar(
                 security_id=ticker,
-                date=datetime(2025, 1, 2, tzinfo=timezone.utc),
+                date=datetime(2025, 1, 2, tzinfo=UTC),
                 open=Decimal("100.0"),
                 high=Decimal("101.0"),
                 low=Decimal("99.0"),
@@ -30,7 +31,7 @@ class _StubProvider:
                 volume=123,
                 quality=DataQuality(
                     source=self.source_id,
-                    as_of_date=datetime.now(tz=timezone.utc),
+                    as_of_date=datetime.now(tz=UTC),
                 ),
             )
         ]

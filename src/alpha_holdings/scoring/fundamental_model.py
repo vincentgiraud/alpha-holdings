@@ -8,7 +8,7 @@ testable while richer fundamentals ingestion is expanded.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -73,7 +73,7 @@ def score_equities_from_snapshots(
     scores = pd.DataFrame(rows)
     _apply_factor_contributions(scores)
 
-    run_as_of = datetime.now(tz=timezone.utc)
+    run_as_of = datetime.now(tz=UTC)
     snapshot_path = storage.write_normalized_snapshot(
         dataset="equity_scores",
         as_of=run_as_of,
@@ -104,7 +104,9 @@ def score_equities_from_snapshots(
     )
 
 
-def _compute_factor_row(*, symbol: str, prices: pd.DataFrame, lookback_days: int) -> dict[str, object] | None:
+def _compute_factor_row(
+    *, symbol: str, prices: pd.DataFrame, lookback_days: int
+) -> dict[str, object] | None:
     if prices.empty:
         return None
     required = {"close", "volume"}
@@ -124,7 +126,9 @@ def _compute_factor_row(*, symbol: str, prices: pd.DataFrame, lookback_days: int
 
     momentum = float((close.iloc[-1] / close.iloc[0]) - 1.0)
     volatility = float(returns.std(ddof=0))
-    avg_dollar_volume = float((window.tail(lookback_days)["close"] * window.tail(lookback_days)["volume"]).mean())
+    avg_dollar_volume = float(
+        (window.tail(lookback_days)["close"] * window.tail(lookback_days)["volume"]).mean()
+    )
 
     return {
         "symbol": symbol,

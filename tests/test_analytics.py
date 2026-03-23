@@ -1,10 +1,8 @@
 """Tests for goal-aware analytics."""
 
-import pytest
 from decimal import Decimal
-from datetime import datetime
 
-from alpha_holdings.analytics.goal import GoalAnalytics, GoalAnalyticsResult
+from alpha_holdings.analytics.goal import GoalAnalytics
 
 
 class TestGoalAnalytics:

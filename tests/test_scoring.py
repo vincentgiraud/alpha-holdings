@@ -1,6 +1,6 @@
 """Tests for Phase 3 universe filtering and scoring workflow."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import duckdb
@@ -8,7 +8,6 @@ import duckdb
 from alpha_holdings.data.storage import LocalStorageBackend
 from alpha_holdings.scoring import score_equities_from_snapshots
 from alpha_holdings.universe import build_liquid_universe_from_snapshots
-
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures"
 
@@ -18,9 +17,11 @@ def test_build_liquid_universe_filters_low_liquidity(tmp_path):
         root_path=tmp_path / "data",
         database_path=tmp_path / "alpha.duckdb",
     )
-    as_of = datetime(2026, 3, 23, 12, 0, 0, tzinfo=timezone.utc)
+    as_of = datetime(2026, 3, 23, 12, 0, 0, tzinfo=UTC)
 
-    _write_price_snapshot(backend, "aapl_prices", "AAPL", as_of, base_close=100.0, base_volume=1_000_000)
+    _write_price_snapshot(
+        backend, "aapl_prices", "AAPL", as_of, base_close=100.0, base_volume=1_000_000
+    )
     _write_price_snapshot(backend, "tiny_prices", "TINY", as_of, base_close=10.0, base_volume=1_000)
 
     universe = build_liquid_universe_from_snapshots(
@@ -41,7 +42,7 @@ def test_build_liquid_universe_uses_seed_membership_and_currency_normalization(t
         root_path=tmp_path / "data",
         database_path=tmp_path / "alpha.duckdb",
     )
-    as_of = datetime(2026, 3, 23, 12, 0, 0, tzinfo=timezone.utc)
+    as_of = datetime(2026, 3, 23, 12, 0, 0, tzinfo=UTC)
 
     _write_price_snapshot(
         backend,
@@ -85,18 +86,29 @@ def test_build_liquid_universe_uses_seed_membership_and_currency_normalization(t
     assert universe.members["currency"].tolist() == ["CHF"]
     assert round(float(universe.members.iloc[0]["avg_dollar_volume"]), 2) > 2_000_000
     assert set(universe.diagnostics["symbol"].tolist()) == {"NOVN", "SHOP"}
-    assert universe.diagnostics.loc[universe.diagnostics["symbol"] == "SHOP", "passes_liquidity"].item() is False
+    assert (
+        universe.diagnostics.loc[
+            universe.diagnostics["symbol"] == "SHOP", "passes_liquidity"
+        ].item()
+        is False
+    )
 
 
-def test_score_equities_from_snapshots_computes_factor_contributions_and_registers_snapshot(tmp_path):
+def test_score_equities_from_snapshots_computes_factor_contributions_and_registers_snapshot(
+    tmp_path,
+):
     backend = LocalStorageBackend(
         root_path=tmp_path / "data",
         database_path=tmp_path / "alpha.duckdb",
     )
-    as_of = datetime(2026, 3, 23, 12, 0, 0, tzinfo=timezone.utc)
+    as_of = datetime(2026, 3, 23, 12, 0, 0, tzinfo=UTC)
 
-    _write_price_snapshot(backend, "aapl_prices", "AAPL", as_of, base_close=100.0, base_volume=1_000_000)
-    _write_price_snapshot(backend, "msft_prices", "MSFT", as_of, base_close=120.0, base_volume=900_000)
+    _write_price_snapshot(
+        backend, "aapl_prices", "AAPL", as_of, base_close=100.0, base_volume=1_000_000
+    )
+    _write_price_snapshot(
+        backend, "msft_prices", "MSFT", as_of, base_close=120.0, base_volume=900_000
+    )
 
     summary = score_equities_from_snapshots(
         storage=backend,

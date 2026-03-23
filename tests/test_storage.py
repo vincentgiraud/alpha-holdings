@@ -1,6 +1,6 @@
 """Tests for storage backend abstraction and local implementation."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import duckdb
 import pandas as pd
@@ -17,7 +17,7 @@ def test_local_storage_writes_raw_and_parquet_and_registers_metadata(tmp_path):
     root = tmp_path / "data"
     db = tmp_path / "meta" / "alpha.duckdb"
     backend = LocalStorageBackend(root_path=root, database_path=db)
-    as_of = datetime(2026, 3, 23, 12, 0, 0, tzinfo=timezone.utc)
+    as_of = datetime(2026, 3, 23, 12, 0, 0, tzinfo=UTC)
 
     raw_path = backend.write_raw_payload(
         provider="yahoo",

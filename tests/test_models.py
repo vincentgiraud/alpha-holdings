@@ -1,17 +1,12 @@
 """Tests for domain models and contracts."""
 
-import pytest
-from decimal import Decimal
 from datetime import datetime
+from decimal import Decimal
 
-from alpha_holdings.domain import (
-    Security,
-    IdentifierMap,
-    PriceBar,
-    DataQuality,
-    Holding,
-    TargetWeight,
-)
+import pytest
+from pydantic import ValidationError
+
+from alpha_holdings.domain import Holding, PriceBar, Security, TargetWeight
 
 
 class TestSecurity:
@@ -30,7 +25,7 @@ class TestSecurity:
 
     def test_security_required_fields(self, data_quality):
         """Test that required fields are enforced."""
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             Security(
                 internal_id="test",
                 ticker="TEST",

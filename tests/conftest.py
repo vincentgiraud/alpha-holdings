@@ -1,14 +1,14 @@
 """Pytest fixtures for alpha-holdings tests."""
 
-import pytest
 from datetime import datetime
-from decimal import Decimal
+
+import pytest
 
 from alpha_holdings.domain import (
     DataQuality,
-    Security,
-    InvestorProfile,
     FireVariant,
+    InvestorProfile,
+    Security,
     WithdrawalPattern,
 )
 

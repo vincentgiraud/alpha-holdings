@@ -10,13 +10,12 @@
 ## Now
 - Phases 1 and 2 are complete. Phase 3 is in progress.
 - `alpha score --date ...` is functional: liquidity-filtered universe from snapshots, deterministic factor scoring (momentum, low-volatility, liquidity), and `equity_scores` snapshot persistence.
-- 79 tests pass.
+- Seeded constrained universe (25 US large-cap + 10 developed ex-US) with identifier mapping, currency normalization, and benchmark proxy assignments.
+- 80 tests pass.
 
 ## Upcoming Work
 
 ### Phase 3 (in progress)
-- [ ] Seed constrained US + developed ex-US universe fixture (25 US large-cap + 10 ex-US names)
-- [ ] Add identifier mapping and currency normalization to universe design
 - [ ] Evolve scoring from price-based starter factors to fundamentals-backed factors
 - [ ] Add provider contract tests for a mock paid adapter (Phase 6 parity)
 

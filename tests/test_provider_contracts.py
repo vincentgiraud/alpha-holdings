@@ -16,7 +16,7 @@ When you add a new adapter, subclass the ``_AdapterContractBase`` mix-in
 below and parametrize it with your adapter instance.
 """
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
@@ -26,9 +26,9 @@ from alpha_holdings.data.providers.base import (
     BenchmarkProvider,
     FundamentalsProvider,
     FXProvider,
+    PriceProvider,
     ProviderCapability,
     ProviderCapabilityError,
-    PriceProvider,
     ReferenceDataProvider,
 )
 from alpha_holdings.domain.models import (
@@ -48,13 +48,13 @@ _TODAY = date(2024, 1, 15)
 _START = date(2024, 1, 2)
 _END = date(2024, 1, 5)
 
-_QUALITY = DataQuality(source="stub", as_of_date=datetime.now(tz=timezone.utc))
+_QUALITY = DataQuality(source="stub", as_of_date=datetime.now(tz=UTC))
 
 
 def _bar(security_id: str = "STUB", d: date = _START) -> PriceBar:
     return PriceBar(
         security_id=security_id,
-        date=datetime(d.year, d.month, d.day, tzinfo=timezone.utc),
+        date=datetime(d.year, d.month, d.day, tzinfo=UTC),
         open=Decimal("100.00"),
         high=Decimal("101.00"),
         low=Decimal("99.50"),
@@ -67,7 +67,7 @@ def _bar(security_id: str = "STUB", d: date = _START) -> PriceBar:
 def _fundamental(security_id: str = "STUB") -> FundamentalSnapshot:
     return FundamentalSnapshot(
         security_id=security_id,
-        period_end_date=datetime(2023, 12, 31, tzinfo=timezone.utc),
+        period_end_date=datetime(2023, 12, 31, tzinfo=UTC),
         period_type="FY",
         revenue=Decimal("1_000_000"),
         quality=_QUALITY,
@@ -90,7 +90,7 @@ def _constituent(benchmark_id: str = "SPY") -> BenchmarkConstituent:
     return BenchmarkConstituent(
         benchmark_id=benchmark_id,
         security_id="STUB",
-        effective_date=datetime(_TODAY.year, _TODAY.month, _TODAY.day, tzinfo=timezone.utc),
+        effective_date=datetime(_TODAY.year, _TODAY.month, _TODAY.day, tzinfo=UTC),
         weight=Decimal("0.01"),
         quality=_QUALITY,
     )
@@ -102,26 +102,26 @@ def _constituent(benchmark_id: str = "SPY") -> BenchmarkConstituent:
 
 
 class StubPriceProvider(PriceProvider):
-    capabilities = frozenset(
-        {ProviderCapability.PRICES, ProviderCapability.CORPORATE_ACTIONS}
-    )
+    capabilities = frozenset({ProviderCapability.PRICES, ProviderCapability.CORPORATE_ACTIONS})
 
     @property
     def source_id(self) -> str:
         return "stub_price"
 
     def _quality(self) -> DataQuality:
-        return DataQuality(source=self.source_id, as_of_date=datetime.now(tz=timezone.utc))
+        return DataQuality(source=self.source_id, as_of_date=datetime.now(tz=UTC))
 
     def get_prices(self, ticker, start, end, *, adjusted=True):
+        _ = (end, adjusted)
         bar = _bar(ticker, start)
         return [bar.model_copy(update={"quality": self._quality()})]
 
     def get_corporate_actions(self, ticker, start, end):
+        _ = end
         return [
             CorporateAction(
                 security_id=ticker,
-                action_date=datetime(start.year, start.month, start.day, tzinfo=timezone.utc),
+                action_date=datetime(start.year, start.month, start.day, tzinfo=UTC),
                 action_type="dividend",
                 value=Decimal("0.50"),
                 quality=self._quality(),
@@ -137,7 +137,7 @@ class StubFundamentalsProvider(FundamentalsProvider):
         return "stub_fundamentals"
 
     def _quality(self) -> DataQuality:
-        return DataQuality(source=self.source_id, as_of_date=datetime.now(tz=timezone.utc))
+        return DataQuality(source=self.source_id, as_of_date=datetime.now(tz=UTC))
 
     def get_fundamentals(self, ticker, *, limit=8):
         snap = _fundamental(ticker)
@@ -153,7 +153,7 @@ class StubReferenceDataProvider(ReferenceDataProvider):
         return "stub_reference"
 
     def _quality(self) -> DataQuality:
-        return DataQuality(source=self.source_id, as_of_date=datetime.now(tz=timezone.utc))
+        return DataQuality(source=self.source_id, as_of_date=datetime.now(tz=UTC))
 
     def get_security(self, ticker):
         sec = _security(ticker)
@@ -168,6 +168,7 @@ class StubFXProvider(FXProvider):
         return "stub_fx"
 
     def get_fx_rate(self, base, quote, as_of):
+        _ = (base, quote, as_of)
         return 1.08  # arbitrary EUR/USD proxy
 
 
@@ -179,6 +180,7 @@ class StubBenchmarkProvider(BenchmarkProvider):
         return "stub_benchmark"
 
     def get_constituents(self, benchmark_id, as_of):
+        _ = as_of
         return [_constituent(benchmark_id)]
 
 
@@ -415,6 +417,7 @@ class TestCapabilityGating:
                 return "no_ca"
 
             def get_prices(self, ticker, start, end, *, adjusted=True):
+                _ = (ticker, start, end, adjusted)
                 return []
 
         provider = NoCorporateActions()

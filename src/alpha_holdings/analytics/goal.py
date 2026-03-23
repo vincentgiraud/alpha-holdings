@@ -6,7 +6,7 @@ likely to meet their stated financial goals under various market scenarios.
 """
 
 from decimal import Decimal
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 from alpha_holdings.domain.investor_profile import InvestorProfile, WithdrawalPattern
 
@@ -23,10 +23,12 @@ class GoalAnalyticsResult(NamedTuple):
     """
 
     profile_id: str
-    wealth_target_probability: Optional[Decimal] = None  # 0.0 to 1.0
-    sequence_of_returns_risk: Optional[tuple[Decimal, Decimal]] = None  # (5th percentile, 95th percentile)
-    safe_withdrawal_rate: Optional[Decimal] = None  # 0.03 to 0.05 typical
-    notes: Optional[str] = None
+    wealth_target_probability: Decimal | None = None  # 0.0 to 1.0
+    sequence_of_returns_risk: tuple[Decimal, Decimal] | None = (
+        None  # (5th percentile, 95th percentile)
+    )
+    safe_withdrawal_rate: Decimal | None = None  # 0.03 to 0.05 typical
+    notes: str | None = None
 
 
 class GoalAnalytics:
@@ -41,7 +43,7 @@ class GoalAnalytics:
         portfolio_value: Decimal,
         portfolio_return_annual: Decimal,
         portfolio_volatility: Decimal,
-        target_wealth: Optional[Decimal] = None,
+        target_wealth: Decimal | None = None,
     ) -> GoalAnalyticsResult:
         """Compute goal analytics for a profile and portfolio state.
 
@@ -59,7 +61,11 @@ class GoalAnalytics:
             target_wealth = GoalAnalytics._estimate_target_wealth(profile, portfolio_value)
 
         prob_success = GoalAnalytics._compute_wealth_probability(
-            portfolio_value, portfolio_return_annual, portfolio_volatility, target_wealth, profile.horizon_years
+            portfolio_value,
+            portfolio_return_annual,
+            portfolio_volatility,
+            target_wealth,
+            profile.horizon_years,
         )
 
         sor_range = GoalAnalytics._estimate_sequence_of_returns_risk(
@@ -81,7 +87,9 @@ class GoalAnalytics:
         )
 
     @staticmethod
-    def _estimate_target_wealth(profile: InvestorProfile, current_portfolio_value: Decimal) -> Decimal:
+    def _estimate_target_wealth(
+        profile: InvestorProfile, current_portfolio_value: Decimal
+    ) -> Decimal:
         """Estimate a reasonable target wealth based on profile.
 
         For accumulation phases (no withdrawals), the target is current value compounded.
@@ -90,7 +98,9 @@ class GoalAnalytics:
         if profile.withdrawal_pattern == WithdrawalPattern.COMPOUND_ONLY:
             # Compound at 6% real return (conservative for equity-heavy)
             annual_return = Decimal("0.06")
-            target = current_portfolio_value * (Decimal("1.0") + annual_return) ** profile.horizon_years
+            target = (
+                current_portfolio_value * (Decimal("1.0") + annual_return) ** profile.horizon_years
+            )
             return target
 
         # For regular drawdown or lump sum, estimate a safe withdrawal amount
@@ -120,21 +130,23 @@ class GoalAnalytics:
         if current_value >= target_value:
             return Decimal("1.00")
 
-        required_annual_return = (target_value / current_value) ** (Decimal("1.0") / Decimal(horizon_years)) - Decimal(
-            "1.0"
-        )
+        required_annual_return = (target_value / current_value) ** (
+            Decimal("1.0") / Decimal(horizon_years)
+        ) - Decimal("1.0")
 
         # Approximate: P(return >= required) assuming normal distribution
         # Z-score: (required - expected) / (volatility / sqrt(horizon))
         expected_return = annual_return
         std_error = volatility / (Decimal(horizon_years) ** Decimal("0.5"))
 
-        z_score = float((required_annual_return - expected_return) / std_error) if std_error > 0 else 0.0
+        z_score = (
+            float((required_annual_return - expected_return) / std_error) if std_error > 0 else 0.0
+        )
 
         # Normal CDF approximation (simple; use scipy.stats.norm in production)
         from math import erf
 
-        prob = (1.0 + erf(z_score / (2 ** 0.5))) / 2.0
+        prob = (1.0 + erf(z_score / (2**0.5))) / 2.0
         return Decimal(str(prob))
 
     @staticmethod
@@ -163,11 +175,11 @@ class GoalAnalytics:
     @staticmethod
     def _compute_safe_withdrawal_rate(
         profile: InvestorProfile,
-        portfolio_value: Decimal,
-        target_wealth: Decimal,
+        _portfolio_value: Decimal,
+        _target_wealth: Decimal,
         annual_return: Decimal,
         volatility: Decimal,
-    ) -> Optional[Decimal]:
+    ) -> Decimal | None:
         """Compute sustainable withdrawal rate adjusted for profile.
 
         Base: 4% rule (Trinity study for 30-year horizon).
@@ -204,7 +216,7 @@ class GoalAnalytics:
 
     @staticmethod
     def _generate_notes(
-        profile: InvestorProfile, prob_success: Decimal, swr: Optional[Decimal]
+        profile: InvestorProfile, prob_success: Decimal, swr: Decimal | None
     ) -> str:
         """Generate qualitative assessment of goal feasibility."""
         notes = []
@@ -215,7 +227,9 @@ class GoalAnalytics:
                 "consider increasing return expectations, extending horizon, or adjusting spending."
             )
         elif prob_success < Decimal("0.75"):
-            notes.append(f"Moderate confidence ({prob_success:.1%}): Monitor quarterly and adjust as needed.")
+            notes.append(
+                f"Moderate confidence ({prob_success:.1%}): Monitor quarterly and adjust as needed."
+            )
         else:
             notes.append(f"Good probability of success ({prob_success:.1%}).")
 
@@ -225,13 +239,16 @@ class GoalAnalytics:
                 "the planned withdrawal pattern given volatility and horizon."
             )
 
-        if profile.withdrawal_pattern == WithdrawalPattern.REGULAR_DRAWDOWN and profile.horizon_years < 5:
+        if (
+            profile.withdrawal_pattern == WithdrawalPattern.REGULAR_DRAWDOWN
+            and profile.horizon_years < 5
+        ):
             notes.append(
                 "🔴 Near-term withdrawals: high sequence-of-returns risk. "
                 "Consider building larger cash buffer."
             )
 
         if profile.crypto_enabled:
-            notes.append("ℹ️ Crypto allocation: treat as speculative; monitor concentration risk.")
+            notes.append("Info: Crypto allocation should be treated as speculative; monitor concentration risk.")
 
         return " ".join(notes) if notes else "Profile appears feasible with current parameters."

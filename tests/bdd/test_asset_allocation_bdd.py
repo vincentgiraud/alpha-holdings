@@ -111,7 +111,7 @@ def then_includes_crypto(allocation):
     assert "crypto" in asset_types
 
 
-@then('the target weights sum to 1.0 within tolerance 0.01')
+@then("the target weights sum to 1.0 within tolerance 0.01")
 def then_weights_sum_to_one(allocation):
     """Ensure weights remain normalized after gating logic."""
     total_target = sum(sleeve.target_weight for sleeve in allocation.asset_classes)

@@ -10,8 +10,9 @@ import pandas as pd
 
 from alpha_holdings.data.storage import StorageBackend
 
-
-DEFAULT_SEED_UNIVERSE_PATH = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "seed_universe.csv"
+DEFAULT_SEED_UNIVERSE_PATH = (
+    Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "seed_universe.csv"
+)
 
 
 @dataclass(slots=True)
@@ -72,10 +73,12 @@ def build_liquid_universe_from_snapshots(
             {
                 "symbol": symbol,
                 "security_id": str(metadata.get("security_id") or symbol),
+                "isin": str(member.get("isin") or metadata.get("security_id") or symbol),
                 "provider_ticker": str(metadata.get("ticker") or symbol),
+                "benchmark": member.get("benchmark"),
                 "dataset": snapshot["dataset"],
                 "snapshot_as_of": str(snapshot["as_of"]),
-                "rows": int(len(frame)),
+                "rows": len(frame),
                 "country": member.get("country"),
                 "region": member.get("region"),
                 "currency": local_currency,
@@ -89,11 +92,17 @@ def build_liquid_universe_from_snapshots(
 
     diagnostics = pd.DataFrame(rows)
     selected = sorted(set(selected))
-    members = diagnostics.loc[diagnostics["passes_liquidity"]].copy() if not diagnostics.empty else pd.DataFrame()
+    members = (
+        diagnostics.loc[diagnostics["passes_liquidity"]].copy()
+        if not diagnostics.empty
+        else pd.DataFrame()
+    )
     return UniverseBuildResult(symbols=selected, diagnostics=diagnostics, members=members)
 
 
-def _select_latest_price_snapshots(*, storage: StorageBackend, as_of: str) -> list[dict[str, object]]:
+def _select_latest_price_snapshots(
+    *, storage: StorageBackend, as_of: str
+) -> list[dict[str, object]]:
     snapshots = storage.list_snapshots()
     filtered = [
         snap
@@ -117,7 +126,9 @@ def _to_datetime(value: object) -> datetime:
 
 def _load_seed_universe(path: Path | None) -> pd.DataFrame:
     if path is None or not path.exists():
-        return pd.DataFrame(columns=["symbol", "security_id", "country", "currency", "region"])
+        return pd.DataFrame(
+            columns=["symbol", "security_id", "isin", "country", "currency", "region", "benchmark"]
+        )
     frame = pd.read_csv(path)
     if "symbol" not in frame.columns:
         raise ValueError(f"Seed universe file {path} must include a 'symbol' column.")
@@ -125,6 +136,10 @@ def _load_seed_universe(path: Path | None) -> pd.DataFrame:
     normalized["symbol"] = normalized["symbol"].astype(str).str.upper().str.strip()
     if "security_id" not in normalized.columns:
         normalized["security_id"] = normalized["symbol"]
+    if "isin" not in normalized.columns:
+        normalized["isin"] = normalized.get("security_id", normalized["symbol"])
+    if "benchmark" not in normalized.columns:
+        normalized["benchmark"] = None
     return normalized
 
 
@@ -155,7 +170,9 @@ def _coerce_positive_float(value: object, *, default: float) -> float:
     return parsed if parsed > 0 else default
 
 
-def _resolve_base_currency_rate(*, local_currency: str, base_currency: str, fx_rate_to_usd: float) -> float:
+def _resolve_base_currency_rate(
+    *, local_currency: str, base_currency: str, fx_rate_to_usd: float
+) -> float:
     normalized_base = base_currency.upper()
     normalized_local = local_currency.upper()
     if normalized_local == normalized_base:
