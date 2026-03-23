@@ -8,17 +8,14 @@
 - It should summarize deltas from the roadmap in `PLAN.md`, not restate the full plan.
 
 ## Now
-- Phases 1 and 2 are complete. Phase 3 is in progress.
-- `alpha refresh --universe ...` now persists price snapshots and EDGAR fundamentals snapshots where available. Provider-native ticker resolution ensures ex-US names (Swiss, German, UK, Canadian exchanges) and share-class tickers (BRK.B) fetch correctly.
-- `alpha score --date ...` is functional: liquidity-filtered universe from snapshots, mixed price/fundamentals factor scoring (momentum, low-volatility, liquidity, profitability, balance-sheet quality, cash-flow quality), explicit degradation for missing fundamentals, and `equity_scores` snapshot persistence.
-- Seeded constrained universe (25 US large-cap + 10 developed ex-US) with identifier mapping, currency normalization, and benchmark proxy assignments.
-- Manual smoke test: all 35/35 tickers refresh, 35/35 symbols scored.
-- 92 tests pass (includes 6 BDD scenarios: 3 asset-allocation, 3 scoring).
+- Phases 1 and 2 complete. Phase 3 nearly complete; Phase 6 hardening in progress.
+- Mock paid adapter contract tests added (56 new tests): structural, schema, capability, composite multi-interface, and free-vs-paid parity checks.
+- 148 tests pass (including 6 BDD scenarios). Lint and format clean.
+- Next: implement portfolio construction (`alpha construct`) to begin Phase 4.
 
 ## Upcoming Work
 
 ### Phase 3 (in progress)
-- [ ] Add provider contract tests for a mock paid adapter (Phase 6 parity)
 
 ### Phase 4
 - [ ] Implement benchmark-aware portfolio construction (`alpha construct`)

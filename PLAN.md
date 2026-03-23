@@ -28,6 +28,7 @@ Phase 3 progress notes (remove when phase completes):
 - BDD scoring scenarios added covering degraded scoring without fundamentals, fundamentals-driven rank differentiation, and partial-fundamentals resilience.
 - Provider-native ticker resolution implemented: `BaseProvider.resolve_ticker()` with Yahoo override for exchange suffixes (CH→.SW, DE→.DE, GB→.L, CA→.TO) and share-class dot→hyphen mapping (BRK.B→BRK-B). Refresh pipeline now passes country metadata to providers. Full 35/35 seed universe now fetches and scores.
 - Next: add provider contract tests for mock paid adapter and begin portfolio construction.
+- Mock paid adapter contract tests completed: 56 new tests covering structural identity, schema validation, capability gating, composite multi-interface providers, and free-vs-paid output parity. Total test count: 148.
 
 ## Steps
 
@@ -51,7 +52,7 @@ Phase 3 progress notes (remove when phase completes):
 
 - [x] **7. Phase 3: Universe design.** Start with a deliberately constrained free-data universe: US large-cap plus a curated developed ex-US subset, rather than full developed markets immediately. Add identifier mapping, currency normalization, liquidity filters, and benchmark-proxy membership rules. Depends on steps 3 through 6.
 
-- [ ] **8. Phase 3: Scoring model.** Implement a transparent, config-driven fundamental score using only factors that can be supported credibly with free inputs at first, and record per-security factor contributions to make later vendor comparisons measurable. Depends on steps 5 through 7.
+- [x] **8. Phase 3: Scoring model.** Implement a transparent, config-driven fundamental score using only factors that can be supported credibly with free inputs at first, and record per-security factor contributions to make later vendor comparisons measurable. Depends on steps 5 through 7.
 
 - [ ] **9. Phase 4: Portfolio engine.** Add benchmark-aware portfolio construction with ETF-like stability controls: max position size, sector and country deviation bands, turnover limits, liquidity rules, and minimum holdings. Depends on step 8.
 
