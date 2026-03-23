@@ -21,16 +21,15 @@ Known limitations:
   appropriate throttling into batch workflows.
 """
 
-import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from functools import lru_cache
 
 import requests
 
 from alpha_holdings.data.providers.base import (
-    ProviderCapability,
     FundamentalsProvider,
+    ProviderCapability,
 )
 from alpha_holdings.domain.models import DataQuality, FundamentalSnapshot
 
@@ -58,7 +57,7 @@ _CONCEPT_MAP: dict[str, str] = {
 
 
 def _utc_now() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 class EdgarFundamentalsProvider(FundamentalsProvider):
@@ -87,7 +86,7 @@ class EdgarFundamentalsProvider(FundamentalsProvider):
         snapshots = _build_snapshots(ticker, facts, limit)
         return snapshots
 
-    @lru_cache(maxsize=512)
+    @lru_cache(maxsize=512)  # noqa: B019
     def _resolve_cik(self, ticker: str) -> str:
         """Return zero-padded 10-digit CIK for *ticker*."""
         resp = requests.get(_EDGAR_TICKERS_URL, headers=_HEADERS, timeout=30)
@@ -153,9 +152,7 @@ def _build_snapshots(
         snapshots.append(
             FundamentalSnapshot(
                 security_id=ticker,
-                period_end_date=datetime.fromisoformat(end_str).replace(
-                    tzinfo=timezone.utc
-                ),
+                period_end_date=datetime.fromisoformat(end_str).replace(tzinfo=UTC),
                 period_type=period_type,
                 revenue=row.get("revenue"),
                 operating_income=row.get("operating_income"),

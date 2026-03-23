@@ -9,11 +9,11 @@
 
 ## Now
 - Phases 1 and 2 are complete. Phase 3 is in progress.
-- `alpha refresh --universe ...` now persists price snapshots and EDGAR fundamentals snapshots where available.
+- `alpha refresh --universe ...` now persists price snapshots and EDGAR fundamentals snapshots where available. Provider-native ticker resolution ensures ex-US names (Swiss, German, UK, Canadian exchanges) and share-class tickers (BRK.B) fetch correctly.
 - `alpha score --date ...` is functional: liquidity-filtered universe from snapshots, mixed price/fundamentals factor scoring (momentum, low-volatility, liquidity, profitability, balance-sheet quality, cash-flow quality), explicit degradation for missing fundamentals, and `equity_scores` snapshot persistence.
 - Seeded constrained universe (25 US large-cap + 10 developed ex-US) with identifier mapping, currency normalization, and benchmark proxy assignments.
-- Manual smoke test passed for `uv run alpha refresh --universe tests/fixtures/seed_universe.csv` followed by `uv run alpha score --date 2026-03-23`.
-- 83 tests pass.
+- Manual smoke test: all 35/35 tickers refresh, 35/35 symbols scored.
+- 92 tests pass (includes 6 BDD scenarios: 3 asset-allocation, 3 scoring).
 
 ## Upcoming Work
 

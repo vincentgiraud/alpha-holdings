@@ -119,9 +119,7 @@ class PortfolioConstraints(BaseModel):
     max_portfolio_volatility: Decimal | None = Field(
         None, description="Target portfolio volatility (std dev)"
     )
-    max_drawdown_tolerance: Decimal | None = Field(
-        None, description="Maximum acceptable drawdown"
-    )
+    max_drawdown_tolerance: Decimal | None = Field(None, description="Maximum acceptable drawdown")
     rebalance_cadence: str = Field(
         default="monthly", description="Rebalance frequency (daily, weekly, monthly, quarterly)"
     )

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import csv
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Mapping
 
 from alpha_holdings.data.providers.base import FundamentalsProvider, PriceProvider
 from alpha_holdings.data.providers.free import (
@@ -54,17 +54,18 @@ def refresh_prices(
     if fallback and fallback not in provider_map:
         raise ValueError(f"Unknown fallback source: {fallback_source}")
 
-    tickers = load_universe_tickers(universe_path)
+    universe_rows = _load_universe_rows(universe_path)
     failures: list[str] = []
     price_snapshots_written = 0
     fundamentals_snapshots_written = 0
     succeeded = 0
-    run_as_of = datetime.now(tz=timezone.utc)
+    run_as_of = datetime.now(tz=UTC)
     fundamentals_provider = _default_fundamentals_provider()
 
-    for ticker in tickers:
+    for ticker, country in universe_rows:
         result = _fetch_with_fallback(
             ticker=ticker,
+            country=country,
             start_date=start_date,
             end_date=end_date,
             primary_source=primary,
@@ -140,7 +141,7 @@ def refresh_prices(
         succeeded += 1
 
     return RefreshSummary(
-        tickers_requested=len(tickers),
+        tickers_requested=len(universe_rows),
         tickers_succeeded=succeeded,
         tickers_failed=len(failures),
         price_snapshots_written=price_snapshots_written,
@@ -176,6 +177,45 @@ def load_universe_tickers(path: Path) -> list[str]:
     return ordered
 
 
+def _load_universe_rows(path: Path) -> list[tuple[str, str]]:
+    """Load (ticker, country) pairs from a universe CSV.
+
+    Falls back to empty country when the column is absent, so the provider's
+    ``resolve_ticker`` receives enough context to apply exchange-suffix rules.
+    """
+    if not path.exists():
+        raise FileNotFoundError(f"Universe file does not exist: {path}")
+
+    with path.open("r", encoding="utf-8", newline="") as fh:
+        reader = csv.DictReader(fh)
+        headers = reader.fieldnames or []
+        if not headers:
+            raise ValueError("Universe CSV must include a header row.")
+
+        ticker_column = _resolve_ticker_column(headers)
+        country_lookup = {h.lower().strip(): h for h in headers}
+        country_column = country_lookup.get("country")
+
+        rows: list[tuple[str, str]] = []
+        for row in reader:
+            ticker = (row.get(ticker_column) or "").strip()
+            if not ticker:
+                continue
+            country = (row.get(country_column) if country_column else "") or ""
+            rows.append((ticker, country.strip()))
+
+    if not rows:
+        raise ValueError("Universe CSV contains no ticker values.")
+
+    seen: set[str] = set()
+    ordered: list[tuple[str, str]] = []
+    for ticker, country in rows:
+        if ticker not in seen:
+            seen.add(ticker)
+            ordered.append((ticker, country))
+    return ordered
+
+
 def _resolve_ticker_column(headers: list[str]) -> str:
     aliases = ["ticker", "symbol", "security_id"]
     lookup = {header.lower().strip(): header for header in headers}
@@ -199,15 +239,18 @@ def _default_fundamentals_provider() -> FundamentalsProvider:
 def _fetch_with_fallback(
     *,
     ticker: str,
+    country: str,
     start_date: date,
     end_date: date,
     primary_source: str,
     fallback_source: str | None,
     providers: Mapping[str, PriceProvider],
 ) -> tuple[str, list[PriceBar]] | None:
+    primary_provider = providers[primary_source]
+    resolved = primary_provider.resolve_ticker(ticker, country=country)
     try:
-        bars = providers[primary_source].get_prices(
-            ticker=ticker,
+        bars = primary_provider.get_prices(
+            ticker=resolved,
             start=start_date,
             end=end_date,
             adjusted=True,
@@ -216,9 +259,11 @@ def _fetch_with_fallback(
     except Exception:
         if not fallback_source:
             return None
+        fallback_provider = providers[fallback_source]
+        resolved_fb = fallback_provider.resolve_ticker(ticker, country=country)
         try:
-            bars = providers[fallback_source].get_prices(
-                ticker=ticker,
+            bars = fallback_provider.get_prices(
+                ticker=resolved_fb,
                 start=start_date,
                 end=end_date,
                 adjusted=True,
@@ -283,9 +328,7 @@ def _fundamental_snapshot_to_row(snapshot: FundamentalSnapshot) -> dict[str, obj
             float(snapshot.free_cash_flow) if snapshot.free_cash_flow is not None else None
         ),
         "shares_outstanding": (
-            float(snapshot.shares_outstanding)
-            if snapshot.shares_outstanding is not None
-            else None
+            float(snapshot.shares_outstanding) if snapshot.shares_outstanding is not None else None
         ),
         "currency": snapshot.currency,
         "source": snapshot.quality.source,

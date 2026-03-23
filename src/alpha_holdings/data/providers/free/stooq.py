@@ -17,14 +17,14 @@ Known limitations:
 - No reference data, fundamentals, or corporate actions.
 """
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pandas as pd
 
 from alpha_holdings.data.providers.base import (
-    ProviderCapability,
     PriceProvider,
+    ProviderCapability,
 )
 from alpha_holdings.domain.models import DataQuality, PriceBar
 
@@ -32,7 +32,7 @@ _STOOQ_URL = "https://stooq.com/q/d/l/?s={ticker}&d1={start}&d2={end}&i=d"
 
 
 def _utc_now() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 class StooqPriceProvider(PriceProvider):
@@ -84,9 +84,7 @@ class StooqPriceProvider(PriceProvider):
 
         bars: list[PriceBar] = []
         for _, row in raw.iterrows():
-            bar_date = pd.Timestamp(row["Date"]).to_pydatetime().replace(
-                tzinfo=timezone.utc
-            )
+            bar_date = pd.Timestamp(row["Date"]).to_pydatetime().replace(tzinfo=UTC)
             bars.append(
                 PriceBar(
                     security_id=ticker,

@@ -249,6 +249,8 @@ class GoalAnalytics:
             )
 
         if profile.crypto_enabled:
-            notes.append("Info: Crypto allocation should be treated as speculative; monitor concentration risk.")
+            notes.append(
+                "Info: Crypto allocation should be treated as speculative; monitor concentration risk."
+            )
 
         return " ".join(notes) if notes else "Profile appears feasible with current parameters."

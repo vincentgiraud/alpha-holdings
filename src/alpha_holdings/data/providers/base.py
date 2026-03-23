@@ -24,7 +24,6 @@ from alpha_holdings.domain.models import (
     Security,
 )
 
-
 # ---------------------------------------------------------------------------
 # Capability registry
 # ---------------------------------------------------------------------------
@@ -67,6 +66,16 @@ class BaseProvider(ABC):
                 "Check provider.capabilities before calling this method."
             )
 
+    def resolve_ticker(self, canonical: str, *, country: str = "") -> str:  # noqa: ARG002
+        """Map a canonical symbol to a provider-native ticker.
+
+        The default implementation returns the canonical symbol unchanged.
+        Provider subclasses override this when their ticker format differs
+        from the canonical universe symbols (e.g. Yahoo needs exchange
+        suffixes for non-US names and uses hyphens for share classes).
+        """
+        return canonical
+
 
 # ---------------------------------------------------------------------------
 # Price provider
@@ -102,9 +111,9 @@ class PriceProvider(BaseProvider):
 
     def get_corporate_actions(
         self,
-        ticker: str,
-        start: date,
-        end: date,
+        ticker: str,  # noqa: ARG002
+        start: date,  # noqa: ARG002
+        end: date,  # noqa: ARG002
     ) -> list[CorporateAction]:
         """Return dividends and splits for *ticker* in the date range.
 
@@ -137,7 +146,7 @@ class FundamentalsProvider(BaseProvider):
 
         Snapshots are ordered newest-first. Providers that can only offer
         annual data should return annual periods and populate
-        ``period_type='FY'``; quarterly providers use ``'Q1'``–``'Q4'``.
+        ``period_type='FY'``; quarterly providers use ``'Q1'``-``'Q4'``.
         Missing individual fields must be ``None`` rather than zero.
         """
 
@@ -156,7 +165,7 @@ class ReferenceDataProvider(BaseProvider):
     def get_security(self, ticker: str) -> Security:
         """Return canonical ``Security`` metadata for *ticker*."""
 
-    def get_identifier_map(self, ticker: str) -> IdentifierMap:
+    def get_identifier_map(self, ticker: str) -> IdentifierMap:  # noqa: ARG002
         """Return cross-vendor identifier map for *ticker*.
 
         Providers that cannot supply multi-vendor mappings should raise

@@ -16,6 +16,9 @@ class _StubProvider:
         self.source_id = source_id
         self.should_fail = should_fail
 
+    def resolve_ticker(self, canonical, *, country=""):  # noqa: ARG002
+        return canonical
+
     def get_prices(self, ticker, start, end, *, adjusted=True):
         _ = (start, end, adjusted)
         if self.should_fail:

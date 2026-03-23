@@ -10,19 +10,19 @@ from alpha_holdings.data.providers.base import (
     BenchmarkProvider,
     FundamentalsProvider,
     FXProvider,
+    PriceProvider,
     ProviderCapability,
     ProviderCapabilityError,
-    PriceProvider,
     ReferenceDataProvider,
 )
 
 __all__ = [
     "BaseProvider",
     "BenchmarkProvider",
-    "FundamentalsProvider",
     "FXProvider",
+    "FundamentalsProvider",
+    "PriceProvider",
     "ProviderCapability",
     "ProviderCapabilityError",
-    "PriceProvider",
     "ReferenceDataProvider",
 ]

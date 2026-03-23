@@ -441,6 +441,56 @@ class TestCapabilityGating:
 
 
 # ---------------------------------------------------------------------------
+# Contract: resolve_ticker
+# ---------------------------------------------------------------------------
+
+
+class TestResolveTickerContract:
+    """The base resolve_ticker is a passthrough; Yahoo overrides with mapping."""
+
+    def test_base_provider_returns_canonical(self):
+        provider = StubPriceProvider()
+        assert provider.resolve_ticker("AAPL") == "AAPL"
+        assert provider.resolve_ticker("BRK.B", country="US") == "BRK.B"
+
+    def test_yahoo_share_class_dot_to_hyphen(self):
+        from alpha_holdings.data.providers.free.yahoo import YahooPriceProvider
+
+        yahoo = YahooPriceProvider()
+        assert yahoo.resolve_ticker("BRK.B", country="US") == "BRK-B"
+        assert yahoo.resolve_ticker("BF.B", country="US") == "BF-B"
+
+    def test_yahoo_swiss_suffix(self):
+        from alpha_holdings.data.providers.free.yahoo import YahooPriceProvider
+
+        yahoo = YahooPriceProvider()
+        assert yahoo.resolve_ticker("NOVN", country="CH") == "NOVN.SW"
+        assert yahoo.resolve_ticker("NESN", country="CH") == "NESN.SW"
+
+    def test_yahoo_us_no_suffix(self):
+        from alpha_holdings.data.providers.free.yahoo import YahooPriceProvider
+
+        yahoo = YahooPriceProvider()
+        assert yahoo.resolve_ticker("AAPL", country="US") == "AAPL"
+        assert yahoo.resolve_ticker("MSFT", country="") == "MSFT"
+
+    def test_yahoo_other_exchange_suffixes(self):
+        from alpha_holdings.data.providers.free.yahoo import YahooPriceProvider
+
+        yahoo = YahooPriceProvider()
+        assert yahoo.resolve_ticker("SAP", country="DE") == "SAP.DE"
+        assert yahoo.resolve_ticker("SHEL", country="GB") == "SHEL.L"
+        assert yahoo.resolve_ticker("RY", country="CA") == "RY.TO"
+
+    def test_yahoo_japan_no_suffix(self):
+        from alpha_holdings.data.providers.free.yahoo import YahooPriceProvider
+
+        yahoo = YahooPriceProvider()
+        # JP excluded: Yahoo uses numeric codes for Tokyo (e.g. 6758.T not SONY.T)
+        assert yahoo.resolve_ticker("SONY", country="JP") == "SONY"
+
+
+# ---------------------------------------------------------------------------
 # Contract: free adapters declare correct capabilities (structural check only)
 # ---------------------------------------------------------------------------
 

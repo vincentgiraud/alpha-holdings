@@ -124,13 +124,9 @@ class FundamentalSnapshot(BaseModel):
     operating_income: Decimal | None = Field(None, description="Operating income")
     net_income: Decimal | None = Field(None, description="Net income")
     eps: Decimal | None = Field(None, description="Earnings per share (diluted preferred)")
-    book_value_per_share: Decimal | None = Field(
-        None, description="Tangible book value per share"
-    )
+    book_value_per_share: Decimal | None = Field(None, description="Tangible book value per share")
     debt_to_equity: Decimal | None = Field(None, description="Total debt / total equity ratio")
-    current_ratio: Decimal | None = Field(
-        None, description="Current assets / current liabilities"
-    )
+    current_ratio: Decimal | None = Field(None, description="Current assets / current liabilities")
     free_cash_flow: Decimal | None = Field(None, description="Free cash flow for the period")
     shares_outstanding: Decimal | None = Field(None, description="Diluted shares outstanding")
     custom_factors: dict[str, Decimal] = Field(
@@ -265,12 +261,8 @@ class PerformanceSnapshot(BaseModel):
     sharpe_ratio: Decimal | None = Field(None, description="Excess return / volatility")
     max_drawdown: Decimal = Field(..., description="Maximum peak-to-trough drawdown over period")
     benchmark_id: str | None = Field(None, description="Benchmark used for attribution")
-    benchmark_return: Decimal | None = Field(
-        None, description="Benchmark total return over period"
-    )
-    excess_return: Decimal | None = Field(
-        None, description="Portfolio return - benchmark return"
-    )
+    benchmark_return: Decimal | None = Field(None, description="Benchmark total return over period")
+    excess_return: Decimal | None = Field(None, description="Portfolio return - benchmark return")
     total_value: Decimal = Field(..., description="Current portfolio market value")
     time_weighted_return: Decimal | None = Field(None, description="TWR if cash flows occurred")
     money_weighted_return: Decimal | None = Field(None, description="MWR if cash flows occurred")

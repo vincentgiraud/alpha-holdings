@@ -7,9 +7,10 @@ rows into the domain contracts used by downstream scoring and portfolio logic.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from collections.abc import Mapping
+from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Mapping, NotRequired, TypedDict
+from typing import NotRequired, TypedDict
 
 from alpha_holdings.domain.models import DataQuality, FundamentalSnapshot, PriceBar
 
@@ -110,7 +111,9 @@ def normalize_yahoo_price_rows(
                 adjusted_close=_to_decimal(adjusted_close),
                 volume=_to_int(volume_value),
                 dividend=_to_decimal(_pick(row, "Dividends", "dividend", default=0)),
-                split_factor=_to_decimal(_pick(row, "Stock Splits", "StockSplits", "split_factor", default=1)),
+                split_factor=_to_decimal(
+                    _pick(row, "Stock Splits", "StockSplits", "split_factor", default=1)
+                ),
                 quality=quality,
             )
         )
@@ -232,15 +235,15 @@ def _to_int(value: object | None) -> int:
 def _to_datetime_utc(value: object) -> datetime:
     if isinstance(value, datetime):
         if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
     if isinstance(value, date):
-        return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+        return datetime(value.year, value.month, value.day, tzinfo=UTC)
     if isinstance(value, str):
         parsed = datetime.fromisoformat(value)
         if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
     raise TypeError(f"Unsupported datetime value type: {type(value)!r}")
 
 
@@ -265,4 +268,4 @@ def _normalize_period_type(
 
 
 def _utc_now() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)

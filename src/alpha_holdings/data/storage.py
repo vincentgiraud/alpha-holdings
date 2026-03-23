@@ -9,10 +9,11 @@ Design goal:
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping, Protocol
+from typing import Any, Protocol
 
 import duckdb
 import pandas as pd
@@ -140,11 +141,11 @@ class LocalStorageBackend:
                 """,
                 [
                     _slug(dataset),
-                    as_of.astimezone(timezone.utc),
+                    as_of.astimezone(UTC),
                     str(snapshot_path),
                     row_count,
                     json.dumps(metadata or {}, sort_keys=True),
-                    datetime.now(tz=timezone.utc),
+                    datetime.now(tz=UTC),
                 ],
             )
 
@@ -184,7 +185,9 @@ class LocalStorageBackend:
             with duckdb.connect(str(self.database_path)) as con2:
                 known = [
                     r[0]
-                    for r in con2.execute("SELECT DISTINCT dataset FROM snapshots ORDER BY dataset").fetchall()
+                    for r in con2.execute(
+                        "SELECT DISTINCT dataset FROM snapshots ORDER BY dataset"
+                    ).fetchall()
                 ]
             hint = f" Known datasets: {', '.join(known)}" if known else ""
             raise FileNotFoundError(
@@ -272,7 +275,9 @@ def build_storage_backend(
         return LocalStorageBackend(root_path=root_path, database_path=database_path)
     if key == "azure_blob":
         if not azure_account_url or not azure_container:
-            raise ValueError("azure_account_url and azure_container are required for azure_blob backend.")
+            raise ValueError(
+                "azure_account_url and azure_container are required for azure_blob backend."
+            )
         return AzureBlobStorageBackend(
             account_url=azure_account_url,
             container=azure_container,
@@ -286,15 +291,15 @@ def _slug(value: str) -> str:
 
 
 def _format_dt_key(value: datetime) -> str:
-    utc = value.astimezone(timezone.utc)
+    utc = value.astimezone(UTC)
     return utc.strftime("%Y%m%dT%H%M%SZ")
 
 
 def _json_default(value: Any) -> Any:
     if isinstance(value, datetime):
         if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc).isoformat()
-        return value.astimezone(timezone.utc).isoformat()
+            return value.replace(tzinfo=UTC).isoformat()
+        return value.astimezone(UTC).isoformat()
     if isinstance(value, Path):
         return str(value)
     return str(value)

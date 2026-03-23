@@ -12,14 +12,14 @@ Known limitations:
   for non-US securities.
 """
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import yfinance as yf
 
 from alpha_holdings.data.providers.base import (
-    ProviderCapability,
     PriceProvider,
+    ProviderCapability,
     ReferenceDataProvider,
 )
 from alpha_holdings.domain.models import (
@@ -31,7 +31,22 @@ from alpha_holdings.domain.models import (
 
 
 def _utc_now() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
+
+
+# Country → Yahoo exchange suffix for non-US markets.
+# Only included where Yahoo uses the same alphabetical ticker with an exchange
+# suffix. Japan is excluded because Yahoo uses numeric codes (e.g. 6758.T) for
+# Tokyo-listed stocks; Japanese names in our universe are US-listed ADRs.
+_YAHOO_EXCHANGE_SUFFIX: dict[str, str] = {
+    "CH": ".SW",
+    "DE": ".DE",
+    "GB": ".L",
+    "CA": ".TO",
+    "AU": ".AX",
+    "FR": ".PA",
+    "HK": ".HK",
+}
 
 
 class YahooPriceProvider(PriceProvider, ReferenceDataProvider):
@@ -48,6 +63,26 @@ class YahooPriceProvider(PriceProvider, ReferenceDataProvider):
     @property
     def source_id(self) -> str:
         return "yahoo"
+
+    def resolve_ticker(self, canonical: str, *, country: str = "") -> str:
+        """Map canonical symbol to Yahoo-native ticker.
+
+        Handles two known divergences:
+        1. Share-class dots → hyphens (e.g. ``BRK.B`` → ``BRK-B``).
+        2. Non-US exchanges need a suffix (e.g. ``NOVN`` + CH → ``NOVN.SW``).
+        """
+        country = country.upper().strip()
+        # Yahoo uses hyphens where canonical tickers use dots for share classes.
+        # A dot followed by 1-2 uppercase letters at the end is a share class.
+        if "." in canonical:
+            parts = canonical.rsplit(".", 1)
+            if len(parts[1]) <= 2 and parts[1].isalpha():
+                canonical = f"{parts[0]}-{parts[1]}"
+
+        suffix = _YAHOO_EXCHANGE_SUFFIX.get(country, "")
+        if suffix and not canonical.endswith(suffix):
+            return f"{canonical}{suffix}"
+        return canonical
 
     # ------------------------------------------------------------------
     # PriceProvider
@@ -88,7 +123,7 @@ class YahooPriceProvider(PriceProvider, ReferenceDataProvider):
 
         bars: list[PriceBar] = []
         for ts, row in raw.iterrows():
-            bar_date = ts.to_pydatetime().replace(tzinfo=timezone.utc)
+            bar_date = ts.to_pydatetime().replace(tzinfo=UTC)
             bars.append(
                 PriceBar(
                     security_id=ticker,
@@ -127,7 +162,7 @@ class YahooPriceProvider(PriceProvider, ReferenceDataProvider):
                 actions.append(
                     CorporateAction(
                         security_id=ticker,
-                        action_date=ts.to_pydatetime().replace(tzinfo=timezone.utc),
+                        action_date=ts.to_pydatetime().replace(tzinfo=UTC),
                         action_type="dividend",
                         value=Decimal(str(row["Dividends"])),
                         quality=quality,
@@ -139,7 +174,7 @@ class YahooPriceProvider(PriceProvider, ReferenceDataProvider):
                 actions.append(
                     CorporateAction(
                         security_id=ticker,
-                        action_date=ts.to_pydatetime().replace(tzinfo=timezone.utc),
+                        action_date=ts.to_pydatetime().replace(tzinfo=UTC),
                         action_type="split",
                         value=Decimal(str(row["Stock Splits"])),
                         quality=quality,

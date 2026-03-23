@@ -25,6 +25,8 @@ Phase 3 progress notes (remove when phase completes):
 - A first fundamentals-backed scoring slice is implemented and wired to CLI (`alpha score`) with transparent factor contributions (momentum, low-volatility, liquidity, profitability, balance-sheet quality, cash-flow quality) and explicit degradation when fundamentals are missing.
 - Scoring results are persisted as `equity_scores` snapshots for reproducible downstream workflows.
 - Manual smoke test over the seeded universe succeeded after fixing partial-fundamentals handling in scoring (`uv run alpha refresh ...` then `uv run alpha score --date 2026-03-23`).
+- BDD scoring scenarios added covering degraded scoring without fundamentals, fundamentals-driven rank differentiation, and partial-fundamentals resilience.
+- Provider-native ticker resolution implemented: `BaseProvider.resolve_ticker()` with Yahoo override for exchange suffixes (CH→.SW, DE→.DE, GB→.L, CA→.TO) and share-class dot→hyphen mapping (BRK.B→BRK-B). Refresh pipeline now passes country metadata to providers. Full 35/35 seed universe now fetches and scores.
 - Next: add provider contract tests for mock paid adapter and begin portfolio construction.
 
 ## Steps
@@ -77,13 +79,19 @@ The test suite is split into two layers for readability and intent clarity.
 1. **Function/unit tests (TDD-oriented):** fast checks for pure logic, validation, and deterministic calculations.
    - Files: `tests/test_models.py`, `tests/test_profiles.py`, `tests/test_analytics.py`
 2. **Scenario tests (BDD-oriented):** business behavior in Given/When/Then format using `pytest-bdd`.
-   - Files: `tests/bdd/features/asset_allocation.feature`, `tests/bdd/test_asset_allocation_bdd.py`
+   - Files: `tests/bdd/features/asset_allocation.feature`, `tests/bdd/test_asset_allocation_bdd.py`, `tests/bdd/features/scoring.feature`, `tests/bdd/test_scoring_bdd.py`
 
 ### Current Scenario Coverage (Implemented)
 
+**Asset allocation (3 scenarios):**
 1. Crypto remains excluded when `crypto_enabled=true` but `risk_appetite=3`.
 2. Crypto is included when `crypto_enabled=true` and `risk_appetite=4`.
 3. For otherwise identical profiles, shorter horizon (5y) results in higher bond target than longer horizon (20y).
+
+**Equity scoring (3 scenarios):**
+4. Symbols without fundamentals are scored and flagged as degraded (zero fundamentals factor contributions).
+5. Fundamentals factors contribute to rank differences when price histories are identical.
+6. Partial fundamentals row (missing some fields) does not crash scoring and the symbol is still marked as having fundamentals.
 
 ### Test Commands
 
