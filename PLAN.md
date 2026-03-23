@@ -1,15 +1,29 @@
 # Plan: Free-Data Upgradeable Strategy Engine
 
+## Purpose
+
+- This file is the long-lived project roadmap.
+- It captures scope, phased milestones, architectural decisions, and verification strategy.
+- Update it when priorities, scope boundaries, or milestone completion states change.
+- Do not use it for day-to-day session notes; those belong in `STATUS.md`.
+
 Build a Python-first research platform managed with uv, starting from free daily market and filing-derived data but structured so paid vendors can be added later by swapping provider adapters rather than rewriting portfolio logic. The first milestone should bootstrap the repository, define stable data contracts, and deliver an end-to-end research loop for a paper portfolio with scoring, construction, rebalancing, backtesting, and performance analytics.
 
 ## Phase Completion Snapshot
 
 - Phase 1 (Bootstrap/contracts/profile/allocation/goal analytics): done
-- Phase 2 (Provider abstraction/adapters/normalization/storage): not started
+- Phase 2 (Provider abstraction/adapters/normalization/storage): done
 - Phase 3 (Universe and scoring): not started
 - Phase 4 (Construction/rebalance/backtest): not started
 - Phase 5 (Analytics workflows and full CLI surface): not started
 - Phase 6 (Upgrade-path hardening and final docs): in progress
+
+Phase 2 progress notes:
+- Canonical normalization helpers for Yahoo/Stooq/EDGAR payload rows are implemented.
+- Storage abstraction seam is implemented with a local backend (parquet + DuckDB) and an `azure_blob` backend contract placeholder.
+- `alpha refresh` is wired end-to-end through provider fetch, normalization output shaping, and storage persistence.
+- Snapshot discovery and inspection workflows are implemented via `alpha list-snapshots` and `alpha show-snapshot`.
+- Manual-test fixture CSV files were added for standard, duplicate, empty, and symbol-alias universe inputs.
 
 ## Steps
 
@@ -92,6 +106,7 @@ The test suite is split into two layers for readability and intent clarity.
 - **Recommended starting universe:** US large-cap plus a curated developed ex-US subset until identifier, filings, and benchmark-proxy coverage are stable.
 - **Recommended benchmark approach for free data:** use a public ETF proxy and constrain sector and country deviations rather than pretending to have licensed index constituent history.
 - **Recommended upgrade strategy:** reserve a dedicated paid-provider namespace and enforce adapter contracts so a later Bloomberg, FactSet, or LSEG integration is an additive change.
+- **Storage backend seam decision (implemented):** storage now uses a backend abstraction so refresh/scoring code can remain backend-agnostic. Local backend writes parquet snapshots and DuckDB metadata; cloud backend key `azure_blob` is reserved with explicit config contract and will be implemented during DevOps.
 - **Recommended execution model:** batch-oriented refresh and rebalance workflows, typically daily data refresh with monthly or quarterly rebalance cadence.
 - **Python version:** 3.12. Key dependencies: `pydantic` v2 for domain models and contracts, `yfinance` for Yahoo Finance adapter, `pandas` and `pyarrow` for data handling and parquet, `duckdb` for local relational metadata and analytics queries, `typer` for the CLI, `pytest` for tests, `ruff` for linting and formatting.
 - **Seed test universe:** 25 US large-cap names plus 10 developed ex-US names stored as a static fixture CSV at `tests/fixtures/seed_universe.csv`. This universe is used for all deterministic backtest, rebalancing, and analytics tests.

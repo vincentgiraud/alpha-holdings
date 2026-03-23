@@ -9,6 +9,12 @@ from pathlib import Path
 # Data storage paths
 DATA_STORAGE_PATH = Path(os.getenv("DATA_STORAGE_PATH", "./data"))
 DATABASE_URL = os.getenv("DATABASE_URL", "duckdb:///./alpha.duckdb")
+STORAGE_BACKEND = os.getenv("STORAGE_BACKEND", "local")
+
+# Future cloud-storage configuration (used when STORAGE_BACKEND=azure_blob)
+AZURE_STORAGE_ACCOUNT_URL = os.getenv("AZURE_STORAGE_ACCOUNT_URL")
+AZURE_STORAGE_CONTAINER = os.getenv("AZURE_STORAGE_CONTAINER")
+AZURE_STORAGE_PREFIX = os.getenv("AZURE_STORAGE_PREFIX", "alpha-holdings")
 
 # Data source configuration
 DATA_SOURCE = os.getenv("DATA_SOURCE", "yahoo")

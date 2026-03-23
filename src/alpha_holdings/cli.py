@@ -3,6 +3,9 @@
 Entry points for workflows: refresh, score, construct, backtest, analyze, and report.
 """
 
+from datetime import date, timedelta
+from pathlib import Path
+
 import typer
 
 app = typer.Typer(help="Alpha Holdings: Free-Data Upgradeable Strategy Engine")
@@ -30,10 +33,111 @@ def check():
 
 
 @app.command()
-def refresh(universe: str = typer.Option(..., help="Path to universe CSV")):
+def refresh(
+    universe: str = typer.Option(..., help="Path to universe CSV"),
+    start_date: str | None = typer.Option(None, help="Start date (YYYY-MM-DD). Default: 90 days ago"),
+    end_date: str | None = typer.Option(None, help="End date (YYYY-MM-DD). Default: today"),
+):
     """Refresh data from free sources."""
-    typer.echo(f"Refreshing data from {universe}...")
-    typer.secho("❌ Not yet implemented", fg=typer.colors.YELLOW)
+    from alpha_holdings import config
+    from alpha_holdings.data.refresh import refresh_prices
+    from alpha_holdings.data.storage import build_storage_backend
+
+    universe_path = Path(universe)
+    parsed_end = _parse_date_or_default(end_date, default=date.today())
+    parsed_start = _parse_date_or_default(
+        start_date,
+        default=parsed_end - timedelta(days=90),
+    )
+
+    backend = build_storage_backend(
+        backend=config.STORAGE_BACKEND,
+        root_path=config.DATA_STORAGE_PATH,
+        database_path=_database_path_from_url(config.DATABASE_URL),
+        azure_account_url=config.AZURE_STORAGE_ACCOUNT_URL,
+        azure_container=config.AZURE_STORAGE_CONTAINER,
+        azure_prefix=config.AZURE_STORAGE_PREFIX,
+    )
+
+    summary = refresh_prices(
+        universe_path=universe_path,
+        start_date=parsed_start,
+        end_date=parsed_end,
+        storage=backend,
+        preferred_source=config.DATA_SOURCE,
+        fallback_source=config.FALLBACK_DATA_SOURCE,
+    )
+
+    typer.echo("Refresh complete")
+    typer.echo(f"  Requested: {summary.tickers_requested}")
+    typer.echo(f"  Succeeded: {summary.tickers_succeeded}")
+    typer.echo(f"  Failed:    {summary.tickers_failed}")
+    typer.echo(f"  Snapshots: {summary.snapshots_written}")
+    if summary.failures:
+        typer.echo(f"  Failed tickers: {', '.join(summary.failures)}")
+
+
+@app.command(name="list-snapshots")
+def list_snapshots(
+    dataset: str | None = typer.Option(None, help="Filter by dataset name"),
+):
+    """List registered data snapshots."""
+    from alpha_holdings import config
+    from alpha_holdings.data.storage import build_storage_backend
+
+    backend = build_storage_backend(
+        backend=config.STORAGE_BACKEND,
+        root_path=config.DATA_STORAGE_PATH,
+        database_path=_database_path_from_url(config.DATABASE_URL),
+        azure_account_url=config.AZURE_STORAGE_ACCOUNT_URL,
+        azure_container=config.AZURE_STORAGE_CONTAINER,
+        azure_prefix=config.AZURE_STORAGE_PREFIX,
+    )
+
+    snapshots = backend.list_snapshots(dataset_filter=dataset)
+    if not snapshots:
+        typer.echo("No snapshots found.")
+        return
+
+    header = f"{'DATASET':<20} {'AS_OF':<26} {'ROWS':>6}  SOURCE"
+    typer.echo(header)
+    typer.echo("-" * len(header))
+    for s in snapshots:
+        as_of = str(s["as_of"])[:19]
+        source = s["metadata"].get("source", "-")
+        typer.echo(f"{s['dataset']:<20} {as_of:<26} {s['row_count']:>6}  {source}")
+
+
+@app.command(name="show-snapshot")
+def show_snapshot(
+    dataset: str = typer.Option(..., help="Dataset name (e.g. 'prices_aapl')"),
+    as_of: str = typer.Option(..., help="As-of datetime prefix (e.g. '2026-03-23' or full UTC stamp)"),
+    limit: int = typer.Option(20, help="Maximum rows to display"),
+):
+    """Display contents of a snapshot."""
+    from alpha_holdings import config
+    from alpha_holdings.data.storage import build_storage_backend
+
+    backend = build_storage_backend(
+        backend=config.STORAGE_BACKEND,
+        root_path=config.DATA_STORAGE_PATH,
+        database_path=_database_path_from_url(config.DATABASE_URL),
+        azure_account_url=config.AZURE_STORAGE_ACCOUNT_URL,
+        azure_container=config.AZURE_STORAGE_CONTAINER,
+        azure_prefix=config.AZURE_STORAGE_PREFIX,
+    )
+
+    try:
+        df = backend.read_snapshot(dataset=dataset, as_of=as_of)
+    except FileNotFoundError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
+    total = len(df)
+    typer.echo(f"Snapshot: dataset={dataset!r}  rows={total}")
+    typer.echo(df.head(limit).to_string(index=False))
+    if total > limit:
+        typer.echo(f"... {total - limit} more rows (use --limit to show more)")
 
 
 @app.command()
@@ -60,3 +164,16 @@ def backtest(start_date: str = typer.Option(..., help="Backtest start (YYYY-MM-D
 
 if __name__ == "__main__":
     app()
+
+
+def _parse_date_or_default(value: str | None, *, default: date) -> date:
+    if not value:
+        return default
+    return date.fromisoformat(value)
+
+
+def _database_path_from_url(database_url: str) -> Path:
+    prefix = "duckdb:///"
+    if database_url.startswith(prefix):
+        return Path(database_url[len(prefix):])
+    return Path(database_url)
