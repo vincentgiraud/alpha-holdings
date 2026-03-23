@@ -13,22 +13,16 @@ Build a Python-first research platform managed with uv, starting from free daily
 
 - [x] Phase 1 (Bootstrap/contracts/profile/allocation/goal analytics): done
 - [x] Phase 2 (Provider abstraction/adapters/normalization/storage): done
-- [ ] Phase 3 (Universe and scoring): in progress
-- [ ] Phase 4 (Construction/rebalance/backtest): not started
+- [x] Phase 3 (Universe and scoring): done
+- [ ] Phase 4 (Construction/rebalance/backtest): in progress
 - [ ] Phase 5 (Analytics workflows and full CLI surface): not started
 - [ ] Phase 6 (Upgrade-path hardening and final docs): in progress
 
-Phase 3 progress notes (remove when phase completes):
-- Snapshot-driven liquidity filtering is implemented to build a constrained working universe from persisted price datasets.
-- Seeded universe fixture (25 US large-cap + 10 developed ex-US) with identifier mapping (ISIN), currency normalization, and benchmark proxy assignments (SPY for US, EXU for developed ex-US).
-- Refresh now persists both price and EDGAR fundamentals snapshots where available, keeping non-US names scoreable even when fundamentals coverage is absent.
-- A first fundamentals-backed scoring slice is implemented and wired to CLI (`alpha score`) with transparent factor contributions (momentum, low-volatility, liquidity, profitability, balance-sheet quality, cash-flow quality) and explicit degradation when fundamentals are missing.
-- Scoring results are persisted as `equity_scores` snapshots for reproducible downstream workflows.
-- Manual smoke test over the seeded universe succeeded after fixing partial-fundamentals handling in scoring (`uv run alpha refresh ...` then `uv run alpha score --date 2026-03-23`).
-- BDD scoring scenarios added covering degraded scoring without fundamentals, fundamentals-driven rank differentiation, and partial-fundamentals resilience.
-- Provider-native ticker resolution implemented: `BaseProvider.resolve_ticker()` with Yahoo override for exchange suffixes (CH→.SW, DE→.DE, GB→.L, CA→.TO) and share-class dot→hyphen mapping (BRK.B→BRK-B). Refresh pipeline now passes country metadata to providers. Full 35/35 seed universe now fetches and scores.
-- Next: add provider contract tests for mock paid adapter and begin portfolio construction.
-- Mock paid adapter contract tests completed: 56 new tests covering structural identity, schema validation, capability gating, composite multi-interface providers, and free-vs-paid output parity. Total test count: 148.
+Phase 4 progress notes (remove when phase completes):
+- Portfolio construction engine implemented (`alpha construct` CLI). Score-proportional weight assignment with iterative position cap, min holdings enforcement, country deviation bands (structural), turnover blending vs. prior weights, and snapshot persistence as `portfolio_weights`.
+- 16 new construction tests covering: basic construction, position cap, min holdings, turnover, output schema, and profile-driven constraints.
+- Sector deviation enforcement deferred until sector metadata is added to seed universe.
+- Next: implement rebalance engine and backtest runner.
 
 ## Steps
 
@@ -54,7 +48,7 @@ Phase 3 progress notes (remove when phase completes):
 
 - [x] **8. Phase 3: Scoring model.** Implement a transparent, config-driven fundamental score using only factors that can be supported credibly with free inputs at first, and record per-security factor contributions to make later vendor comparisons measurable. Depends on steps 5 through 7.
 
-- [ ] **9. Phase 4: Portfolio engine.** Add benchmark-aware portfolio construction with ETF-like stability controls: max position size, sector and country deviation bands, turnover limits, liquidity rules, and minimum holdings. Depends on step 8.
+- [x] **9. Phase 4: Portfolio engine.** Add benchmark-aware portfolio construction with ETF-like stability controls: max position size, sector and country deviation bands, turnover limits, liquidity rules, and minimum holdings. Depends on step 8.
 
 - [ ] **10. Phase 4: Rebalancing and backtesting.** Build the rebalance engine and historical runner around point-in-time snapshots where available, and add explicit warnings when free-source data forces weaker assumptions. Depends on steps 6 through 9.
 

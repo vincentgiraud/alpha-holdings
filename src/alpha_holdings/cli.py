@@ -195,9 +195,43 @@ def score(date: str = typer.Option(..., help="Score as-of date prefix (YYYY-MM-D
 
 @app.command()
 def construct(date: str = typer.Option(..., help="Construction date (YYYY-MM-DD)")):
-    """Construct target portfolio."""
-    typer.echo(f"Constructing portfolio as of {date}...")
-    typer.secho("❌ Not yet implemented", fg=typer.colors.YELLOW)
+    """Construct target portfolio from equity scores."""
+    from alpha_holdings import config
+    from alpha_holdings.data.storage import build_storage_backend
+    from alpha_holdings.portfolio import construct_portfolio
+
+    backend = build_storage_backend(
+        backend=config.STORAGE_BACKEND,
+        root_path=config.DATA_STORAGE_PATH,
+        database_path=_database_path_from_url(config.DATABASE_URL),
+        azure_account_url=config.AZURE_STORAGE_ACCOUNT_URL,
+        azure_container=config.AZURE_STORAGE_CONTAINER,
+        azure_prefix=config.AZURE_STORAGE_PREFIX,
+    )
+
+    try:
+        result = construct_portfolio(
+            storage=backend,
+            as_of=date,
+            seed_universe_path=config.UNIVERSE_SEED_PATH,
+        )
+    except ValueError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from exc
+
+    typer.echo(f"Constructed portfolio '{result.portfolio_id}' as of {result.as_of}")
+    typer.echo(f"  Holdings:     {result.holdings_count}")
+    typer.echo(f"  Total weight: {result.total_weight}")
+    typer.echo(f"  Max weight:   {result.max_weight}")
+    if result.turnover_vs_prior is not None:
+        typer.echo(f"  Turnover:     {result.turnover_vs_prior:.2%}")
+    typer.echo(f"  Snapshot:     {result.snapshot_path}")
+    typer.echo("")
+    typer.echo(
+        result.weights[["symbol", "target_weight", "composite_score", "rank", "country"]].to_string(
+            index=False
+        )
+    )
 
 
 @app.command()

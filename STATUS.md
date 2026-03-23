@@ -8,24 +8,23 @@
 - It should summarize deltas from the roadmap in `PLAN.md`, not restate the full plan.
 
 ## Now
-- Phases 1 and 2 complete. Phase 3 nearly complete; Phase 6 hardening in progress.
-- Mock paid adapter contract tests added (56 new tests): structural, schema, capability, composite multi-interface, and free-vs-paid parity checks.
-- 148 tests pass (including 6 BDD scenarios). Lint and format clean.
-- Next: implement portfolio construction (`alpha construct`) to begin Phase 4.
+- Phases 1–2 complete. Phase 3 complete. Phase 4 in progress. Phase 6 hardening ongoing.
+- `alpha construct` implemented: score-proportional weights with position cap, min holdings, country deviation, turnover blending, and snapshot persistence.
+- 164 tests pass (including 16 construction tests, 6 BDD scenarios). Lint and format clean.
+- Next: implement rebalance engine (`alpha rebalance`) and backtest runner (`alpha backtest`).
 
 ## Upcoming Work
 
 ### Phase 3 (in progress)
 
 ### Phase 4
-- [ ] Implement benchmark-aware portfolio construction (`alpha construct`)
-- [ ] Add position size, sector/country deviation, turnover, liquidity, and min holdings constraints
 - [ ] Build rebalance engine (`alpha rebalance`)
 - [ ] Build historical backtest runner around point-in-time snapshots (`alpha backtest`)
 - [ ] Add explicit degraded-assumption warnings for free-source data in backtest
+- [ ] Add sector deviation enforcement once sector metadata is in seed universe
 
 ### Phase 5
-- [ ] Complete CLI surface: `alpha construct`, `alpha rebalance`, `alpha backtest`, `alpha report`
+- [ ] Complete CLI surface: `alpha rebalance`, `alpha backtest`, `alpha report`
 - [ ] Add portfolio analytics (returns, volatility, Sharpe, drawdown)
 - [ ] Add benchmark-relative analytics (tracking error, information ratio, attribution)
 - [ ] Add performance snapshot persistence
@@ -35,7 +34,8 @@
 
 ## Known Limitations
 - EDGAR fundamentals coverage is US-centric, so mixed universes still rely on graceful degradation for ex-US symbols without fundamentals snapshots.
-- `alpha construct` and `alpha backtest` are scaffolded but not implemented yet.
+- `alpha backtest` is scaffolded but not implemented yet.
+- Sector deviation enforcement deferred until sector metadata is added to seed universe.
 - `azure_blob` backend remains a contract seam and intentionally raises `NotImplementedError` until DevOps phase implementation.
 - Optional cleanup pending: migrate Pydantic `Config` usage to `ConfigDict` to remove deprecation warnings.
 
