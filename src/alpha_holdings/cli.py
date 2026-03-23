@@ -204,10 +204,6 @@ def backtest(start_date: str = typer.Option(..., help="Backtest start (YYYY-MM-D
     typer.secho("❌ Not yet implemented", fg=typer.colors.YELLOW)
 
 
-if __name__ == "__main__":
-    app()
-
-
 def _parse_date_or_default(value: str | None, *, default: date) -> date:
     if not value:
         return default
@@ -219,3 +215,7 @@ def _database_path_from_url(database_url: str) -> Path:
     if database_url.startswith(prefix):
         return Path(database_url[len(prefix):])
     return Path(database_url)
+
+
+if __name__ == "__main__":
+    app()
