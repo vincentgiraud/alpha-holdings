@@ -9,14 +9,15 @@
 
 ## Now
 - Phases 1 and 2 are complete. Phase 3 is in progress.
-- `alpha score --date ...` is functional: liquidity-filtered universe from snapshots, deterministic factor scoring (momentum, low-volatility, liquidity), and `equity_scores` snapshot persistence.
+- `alpha refresh --universe ...` now persists price snapshots and EDGAR fundamentals snapshots where available.
+- `alpha score --date ...` is functional: liquidity-filtered universe from snapshots, mixed price/fundamentals factor scoring (momentum, low-volatility, liquidity, profitability, balance-sheet quality, cash-flow quality), explicit degradation for missing fundamentals, and `equity_scores` snapshot persistence.
 - Seeded constrained universe (25 US large-cap + 10 developed ex-US) with identifier mapping, currency normalization, and benchmark proxy assignments.
-- 80 tests pass.
+- Manual smoke test passed for `uv run alpha refresh --universe tests/fixtures/seed_universe.csv` followed by `uv run alpha score --date 2026-03-23`.
+- 83 tests pass.
 
 ## Upcoming Work
 
 ### Phase 3 (in progress)
-- [ ] Evolve scoring from price-based starter factors to fundamentals-backed factors
 - [ ] Add provider contract tests for a mock paid adapter (Phase 6 parity)
 
 ### Phase 4
@@ -36,7 +37,7 @@
 - No hard blockers currently.
 
 ## Known Limitations
-- `alpha score` currently uses a transparent price-derived starter factor set (momentum, low-volatility, liquidity) while fundamentals ingestion is expanded.
+- EDGAR fundamentals coverage is US-centric, so mixed universes still rely on graceful degradation for ex-US symbols without fundamentals snapshots.
 - `alpha construct` and `alpha backtest` are scaffolded but not implemented yet.
 - `azure_blob` backend remains a contract seam and intentionally raises `NotImplementedError` until DevOps phase implementation.
 - Optional cleanup pending: migrate Pydantic `Config` usage to `ConfigDict` to remove deprecation warnings.

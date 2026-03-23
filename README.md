@@ -8,10 +8,14 @@ Implemented now:
 - Domain contracts and investor profile models
 - Profile-to-constraints resolver and top-level asset allocation
 - Goal analytics baseline
+- Provider abstraction, free-source adapters, normalization, and local snapshot storage
+- Seeded constrained universe with liquidity filtering and benchmark proxy assignments
+- Snapshot-driven equity scoring with transparent factor contributions and persisted `equity_scores`
 - Unit tests and BDD scenarios
 
 Partially implemented now:
 - `alpha refresh`, `alpha list-snapshots`, `alpha show-snapshot`, and `alpha score` are functional
+- `alpha construct` and `alpha backtest` exist as CLI commands but are placeholders only
 
 Planned next:
 - Phase 3 expansion: richer universe rules and fundamentals-backed factor inputs
@@ -65,17 +69,15 @@ alpha_holdings/
 │   ├── normalization.py     # Source-to-canonical transformations
 │   └── storage.py           # Local metadata and parquet snapshots
 ├── portfolio/
-│   ├── asset_allocation.py  # AssetAllocator: profile → sleeve weights
-│   ├── construction.py      # Target weight generation and constraint enforcement
-│   └── rebalance.py         # Trade proposal and turnover controls
+│   └── asset_allocation.py  # AssetAllocator: profile → sleeve weights
 ├── universe/
 │   └── builder.py           # Universe construction and benchmark proxies
 ├── scoring/
-│   └── fundamental_model.py # Free-data-compatible factors and composite score
+│   └── fundamental_model.py # Price-derived starter factors and composite score
 ├── backtest/
-│   └── runner.py            # Historical orchestration and data-quality warnings
+│   └── __init__.py          # Backtesting package placeholder
 ├── analytics/
-│   ├── performance.py       # Return, risk, attribution analytics
+│   ├── performance.py       # Return and risk analytics
 │   └── goal.py              # Goal-aware analytics: wealth probability, SWR, etc.
 └── cli.py                   # Operator entry points
 ```
@@ -86,7 +88,7 @@ alpha_holdings/
 - **Two-tier construction:** Asset Allocator generates sleeve weights (equity/bond/crypto) from InvestorProfile; per-sleeve security selection follows independently
 - **Bonds:** Always included; weight floor rises as horizon shrinks and risk appetite decreases
 - **Crypto:** Opt-in satellite sleeve (enabled when `crypto_enabled=true` and `risk_appetite >= 4`); capped broad ETF proxy, never individual coins
-- **Stability controls:** Max position size, sector/country deviation bands, turnover limits, liquidity rules
+- **Planned stability controls:** Max position size, sector/country deviation bands, turnover limits, liquidity rules
 
 ### Free-Data Foundation
 - **Yahoo Finance:** Daily price history and metadata
@@ -113,28 +115,51 @@ alpha_holdings/
 
 ## Recommended Workflows
 
-The examples below describe target workflows for upcoming phases. The corresponding CLI commands are not all implemented yet.
+Implemented today:
 
 ### Refresh and Normalize
 ```bash
-alpha refresh --universe seed_universe.csv --sources yahoo,edgar --output data/
+uv run alpha refresh --universe tests/fixtures/seed_universe.csv
 ```
+
+This refreshes price data using the configured provider settings and writes snapshots to the configured storage backend.
+
+### Inspect Snapshots
+```bash
+uv run alpha list-snapshots
+uv run alpha show-snapshot --dataset aapl_prices --as-of 2026-03-23
+```
+
+### Score Equities
+```bash
+uv run alpha score --date 2026-03-23
+```
+
+This computes the current starter score from persisted price snapshots and writes an `equity_scores` snapshot.
+
+Planned next:
 
 ### Score and Construct
 ```bash
-alpha score --date 2025-01-31
-alpha construct --date 2025-01-31 --profile fat_fire_10yr --constraints default
+uv run alpha score --date 2025-01-31
+uv run alpha construct --date 2025-01-31
 ```
+
+`alpha score` is implemented. `alpha construct` is currently a placeholder command.
 
 ### Backtest
 ```bash
-alpha backtest --start-date 2020-01-01 --end-date 2025-01-31 --profile fat_fire_10yr
+uv run alpha backtest --start-date 2020-01-01 --end-date 2025-01-31
 ```
+
+`alpha backtest` is currently a placeholder command.
 
 ### Analyze
 ```bash
-alpha analyze --backtest-output backtest_results.parquet --benchmark SPY
+uv run alpha analyze --backtest-output backtest_results.parquet --benchmark SPY
 ```
+
+This workflow is planned and not implemented yet.
 
 ## Upgrade Path
 
