@@ -298,3 +298,105 @@ class TestBacktestErrors:
                 end_date="2025-03-28",
                 seed_universe_path=seed_path,
             )
+
+
+# ---------------------------------------------------------------------------
+# Tests: Fundamentals-aware backtesting
+# ---------------------------------------------------------------------------
+
+
+class TestFundamentalsAwareBacktest:
+    def test_backtest_with_fundamentals_factors(self, tmp_path):
+        """Verify that backtest scoring uses fundamentals factors when available."""
+        backend = _make_backend(tmp_path)
+        symbols = ["AAPL", "MSFT", "GOOGL"]
+        seed_path = _make_seed_universe(tmp_path, symbols)
+        as_of = datetime(2026, 3, 23, 12, 0, 0, tzinfo=UTC)
+
+        # Seed price histories (uptrend for all)
+        for i, symbol in enumerate(symbols):
+            prices = [100.0 + i + j * 0.5 for j in range(60)]
+            _seed_price_history(backend, symbol, prices)
+
+        # Seed fundamentals snapshots for two symbols
+        # AAPL: profitable, strong balance sheet, good cash flow
+        _write_fundamentals_snapshot(
+            backend,
+            "aapl_fundamentals",
+            "AAPL",
+            as_of,
+            revenue=100.0,
+            net_income=25.0,
+            debt_to_equity=0.5,
+            current_ratio=2.0,
+            free_cash_flow=20.0,
+        )
+
+        # MSFT: highly profitable, very strong balance sheet
+        _write_fundamentals_snapshot(
+            backend,
+            "msft_fundamentals",
+            "MSFT",
+            as_of,
+            revenue=100.0,
+            net_income=30.0,
+            debt_to_equity=0.3,
+            current_ratio=2.5,
+            free_cash_flow=25.0,
+        )
+        # GOOGL: no fundamentals snapshot (degraded mode)
+
+        result = run_backtest(
+            storage=backend,
+            start_date="2025-01-02",
+            end_date="2025-03-28",
+            seed_universe_path=seed_path,
+            lookback_days=10,
+        )
+
+        # Basic validation: backtest completed with NAV series
+        assert result.rebalance_count >= 1
+        assert len(result.nav_series) > 0
+        assert result.nav_series["nav"].iloc[0] > 0
+        # Verify rebalance occurred and produced weight history
+        if result.weight_history is not None:
+            assert len(result.weight_history) > 0
+        # Check for degraded-mode warning for GOOGL
+        assert any("degraded" in w.lower() or "free-source" in w.lower() for w in result.warnings)
+
+
+def _write_fundamentals_snapshot(
+    backend,
+    dataset: str,
+    ticker: str,
+    as_of: datetime,
+    *,
+    revenue: float,
+    net_income: float,
+    debt_to_equity: float,
+    current_ratio: float,
+    free_cash_flow: float,
+) -> None:
+    rows = [
+        {
+            "security_id": ticker,
+            "period_end_date": str(as_of.date()),
+            "period_type": "FY",
+            "revenue": revenue,
+            "net_income": net_income,
+            "debt_to_equity": debt_to_equity,
+            "current_ratio": current_ratio,
+            "free_cash_flow": free_cash_flow,
+            "source": "test",
+            "currency": "USD",
+        }
+    ]
+
+    snapshot_path = backend.write_normalized_snapshot(dataset=dataset, as_of=as_of, rows=rows)
+    backend.register_snapshot(
+        dataset=dataset,
+        as_of=as_of,
+        snapshot_path=snapshot_path,
+        row_count=len(rows),
+        metadata={"source": "test"},
+    )

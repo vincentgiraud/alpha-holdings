@@ -144,6 +144,12 @@ def run_backtest(
         "Results are indicative, not auditable performance."
     )
 
+    # Load fundamentals snapshots for all symbols (once, at the start)
+    fundamentals_by_symbol = _load_fundamentals_snapshots(
+        storage=storage,
+        symbols=symbols,
+    )
+
     # 4. Walk-forward simulation
     nav = initial_value
     nav_rows: list[dict] = []
@@ -168,6 +174,7 @@ def run_backtest(
                     constraints=constraints,
                     max_weight=float(constraints.max_single_name_weight),
                     min_holdings=constraints.min_holdings_count,
+                    fundamentals=fundamentals_by_symbol,
                 )
                 if new_weights:
                     weights = new_weights
@@ -408,11 +415,13 @@ def _score_and_construct(
     constraints: PortfolioConstraints,  # noqa: ARG001
     max_weight: float,
     min_holdings: int,
+    fundamentals: dict[str, pd.DataFrame] | None = None,
 ) -> dict[str, float]:
     """In-memory scoring and weight construction for the backtest.
 
     Uses the same factor model as the main scoring engine but operates on
-    in-memory DataFrames rather than storage snapshots.
+    in-memory DataFrames rather than storage snapshots. When fundamentals
+    data is provided, includes fundamentals factors in the composite score.
     """
     if len(prices) < 2:
         return {}
@@ -434,12 +443,17 @@ def _score_and_construct(
         vol_col = volumes[symbol] if symbol in volumes.columns else pd.Series(dtype=float)
         avg_dollar_vol = float((col * vol_col.reindex(col.index).fillna(0)).mean())
 
+        # Compute fundamentals metrics if available
+        fund_data = fundamentals.get(symbol) if fundamentals else None
+        fund_metrics = _compute_fundamentals_metrics_backtest(fund_data)
+
         scores.append(
             {
                 "symbol": symbol,
                 "momentum": momentum,
                 "volatility": volatility,
                 "avg_dollar_volume": avg_dollar_vol,
+                **fund_metrics,
             }
         )
 
@@ -452,7 +466,28 @@ def _score_and_construct(
     df["f_momentum"] = _zscore(df["momentum"])
     df["f_low_vol"] = _zscore(-df["volatility"])
     df["f_liquidity"] = _zscore(df["avg_dollar_volume"])
-    df["composite"] = df[["f_momentum", "f_low_vol", "f_liquidity"]].mean(axis=1)
+
+    # Include fundamentals factors if any symbol has them
+    factor_cols = ["f_momentum", "f_low_vol", "f_liquidity"]
+    if "has_fundamentals" in df.columns and df["has_fundamentals"].any():
+        df["f_profitability"] = 0.0
+        df["f_balance_sheet"] = 0.0
+        df["f_cash_flow"] = 0.0
+
+        fundamentals_mask = df["has_fundamentals"].astype(bool)
+        if fundamentals_mask.any():
+            df.loc[fundamentals_mask, "f_profitability"] = _zscore(
+                df.loc[fundamentals_mask, "profitability"]
+            )
+            df.loc[fundamentals_mask, "f_balance_sheet"] = _zscore(
+                df.loc[fundamentals_mask, "balance_sheet_quality"]
+            )
+            df.loc[fundamentals_mask, "f_cash_flow"] = _zscore(
+                df.loc[fundamentals_mask, "cash_flow_quality"]
+            )
+        factor_cols.extend(["f_profitability", "f_balance_sheet", "f_cash_flow"])
+
+    df["composite"] = df[factor_cols].mean(axis=1)
 
     # Score-proportional weights
     min_score = df["composite"].min()
@@ -555,6 +590,96 @@ def _read_latest_dataset(*, storage: StorageBackend, dataset: str) -> pd.DataFra
         df = pd.read_parquet(latest["snapshot_path"])
         return df if not df.empty else None
     except (FileNotFoundError, KeyError):
+        return None
+
+
+def _load_fundamentals_snapshots(
+    *,
+    storage: StorageBackend,
+    symbols: list[str],
+) -> dict[str, pd.DataFrame]:
+    """Load the latest fundamentals snapshot for each symbol.
+
+    Returns a dict mapping symbol to its fundamentals DataFrame,
+    or empty dict if no fundamentals available.
+    """
+    fundamentals: dict[str, pd.DataFrame] = {}
+    for symbol in symbols:
+        dataset = f"{symbol.lower()}_fundamentals"
+        df = _read_latest_dataset(storage=storage, dataset=dataset)
+        if df is not None and not df.empty:
+            fundamentals[symbol] = df
+    return fundamentals
+
+
+def _compute_fundamentals_metrics_backtest(
+    fundamentals: pd.DataFrame | None,
+) -> dict[str, object]:
+    """Compute fundamentals factor metrics from a DataFrame.
+
+    Returns dict with profitability, balance_sheet_quality, cash_flow_quality,
+    and has_fundamentals flag.
+    """
+    if fundamentals is None or fundamentals.empty:
+        return {
+            "profitability": 0.0,
+            "balance_sheet_quality": 0.0,
+            "cash_flow_quality": 0.0,
+            "has_fundamentals": False,
+        }
+
+    # Get latest period if multiple periods available
+    ordered = (
+        fundamentals.sort_values("period_end_date", ascending=False)
+        if "period_end_date" in fundamentals.columns
+        else fundamentals
+    )
+    latest = ordered.iloc[0] if not ordered.empty else None
+    if latest is None:
+        return {
+            "profitability": 0.0,
+            "balance_sheet_quality": 0.0,
+            "cash_flow_quality": 0.0,
+            "has_fundamentals": False,
+        }
+
+    # Extract metrics
+    net_income = _coerce_float_backtest(latest.get("net_income"))
+    revenue = _coerce_float_backtest(latest.get("revenue"))
+    debt_to_equity = _coerce_float_backtest(latest.get("debt_to_equity"))
+    current_ratio = _coerce_float_backtest(latest.get("current_ratio"))
+    free_cash_flow = _coerce_float_backtest(latest.get("free_cash_flow"))
+
+    # Compute composite metrics
+    profitability = 0.0
+    if revenue is not None and revenue > 0 and net_income is not None:
+        profitability = net_income / revenue
+    elif net_income is not None:
+        profitability = net_income
+
+    balance_sheet_quality = 0.0
+    if debt_to_equity is not None:
+        balance_sheet_quality += -debt_to_equity
+    if current_ratio is not None:
+        balance_sheet_quality += current_ratio
+
+    cash_flow_quality = free_cash_flow if free_cash_flow is not None else 0.0
+
+    return {
+        "profitability": float(profitability or 0.0),
+        "balance_sheet_quality": float(balance_sheet_quality),
+        "cash_flow_quality": float(cash_flow_quality),
+        "has_fundamentals": True,
+    }
+
+
+def _coerce_float_backtest(value: object) -> float | None:
+    """Safely coerce a value to float, returning None if not possible."""
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
         return None
 
 

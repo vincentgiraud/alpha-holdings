@@ -27,6 +27,14 @@
 - When starting a new session, update `STATUS.md → Now` to reflect the current state before beginning work.
 - When finishing a session, ensure STATUS.md reflects what's next and any new blockers.
 
+## Git workflow
+
+- After each completed task or logical unit of work, commit changes with a concise message referencing the PLAN step number.
+- Example commit: `feat: phase-7-step-15 implement fundamentals-aware backtest scoring`
+- Commits create natural boundaries in history and enable clear session handoffs — if a session ends with a clean commit, the next session knows exactly where work left off.
+- Before committing: ensure `uv run pytest -q` passes and `uv run ruff check . && uv run ruff format --check .` passes.
+- Git history is the audit trail; PLAN.md and STATUS.md are the current roadmap.
+
 ## Code conventions
 
 - Python 3.12, managed with `uv`.
