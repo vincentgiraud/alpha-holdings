@@ -8,18 +8,17 @@
 - It should summarize deltas from the roadmap in `PLAN.md`, not restate the full plan.
 
 ## Now
-- Phases 1–4 complete. Phase 5 in progress. Phase 6 hardening ongoing.
-- `alpha construct`, `alpha rebalance`, `alpha backtest`, `alpha report` all implemented.
-- Portfolio snapshot persistence implemented: `holdings_snapshot_{portfolio_id}` dataset tracks shares, weighted-average book cost, realized gains, and unrealized gains after each rebalance.
-- 241 tests pass (229 + 12 new BDD scenarios). Lint and format clean.
-- Next: benchmark-relative analytics (factor attribution), HTML report output.
+- Phases 1–4 complete. Phase 5 nearing completion. Phase 6 hardening ongoing.
+- Factor attribution via returns-based style analysis implemented (`analytics/attribution.py`).
+- HTML report output implemented (`analytics/html_report.py`) with NAV chart, drawdown chart, attribution bars, weight history stacked area.
+- Backtest now tracks `weight_history` at each rebalance for visualization.
+- `alpha report --html <path>` generates self-contained HTML report with all sections.
+- 268 tests pass (241 prior + 27 new). Lint and format clean.
 
 ## Upcoming Work
 
 ### Phase 5
-- [ ] Add benchmark-relative analytics (factor attribution)
-- [ ] Extend `alpha report` with HTML output
-- [ ] Add portfolio history visualization (NAV, weights over time)
+(All major items complete.)
 
 ### Phase 6
 - [ ] Contract compliance tests for multi-vendor scenarios

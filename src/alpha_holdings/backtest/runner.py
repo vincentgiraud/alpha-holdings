@@ -39,6 +39,7 @@ class BacktestResult:
     snapshot_path: Path
     nav_series: pd.DataFrame
     warnings: list[str]
+    weight_history: pd.DataFrame | None = None
 
 
 def run_backtest(
@@ -148,6 +149,7 @@ def run_backtest(
     nav_rows: list[dict] = []
     weights: dict[str, float] = {}
     rebalance_count = 0
+    weight_snapshots: list[dict] = []
 
     trading_dates = price_matrix.index.tolist()
 
@@ -170,6 +172,9 @@ def run_backtest(
                 if new_weights:
                     weights = new_weights
                     rebalance_count += 1
+                    # Record weight snapshot for visualization
+                    snap = {"date": trade_date, **weights}
+                    weight_snapshots.append(snap)
 
         # Compute daily return
         if i > 0 and weights:
@@ -264,6 +269,9 @@ def run_backtest(
         },
     )
 
+    # Build weight history DataFrame
+    weight_history_df = pd.DataFrame(weight_snapshots) if weight_snapshots else None
+
     return BacktestResult(
         start_date=start_date,
         end_date=end_date,
@@ -278,6 +286,7 @@ def run_backtest(
         snapshot_path=snapshot_path,
         nav_series=nav_df,
         warnings=warnings,
+        weight_history=weight_history_df,
     )
 
 

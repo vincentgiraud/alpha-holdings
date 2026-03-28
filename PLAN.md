@@ -20,11 +20,12 @@ Build a Python-first research platform managed with uv, starting from free daily
 
 Phase 5 progress notes (remove when phase completes):
 - Rebalance engine (`alpha rebalance`) implemented: reads latest target vs. prior weights, generates buy/sell trade proposals with share counts and values from latest prices, persists as `trade_proposals` snapshot.
-- Backtest runner (`alpha backtest`) implemented: walk-forward simulation over stored price data with in-memory scoring at each rebalance date, daily NAV tracking with weight drift, configurable frequency (weekly/monthly/quarterly), benchmark comparison.
+- Backtest runner (`alpha backtest`) implemented: walk-forward simulation over stored price data with in-memory scoring at each rebalance date, daily NAV tracking with weight drift, configurable frequency (weekly/monthly/quarterly), benchmark comparison. Now also tracks `weight_history` DataFrame at each rebalance for visualization.
 - Performance report (`alpha report`) implemented: reads backtest NAV series and computes total/annualized return, volatility, Sharpe, max drawdown, Calmar ratio, best/worst day, benchmark-relative metrics (excess return, tracking error, information ratio), persists as `performance_report` snapshot.
 - Portfolio snapshot persistence (`portfolio/state.py`) implemented: `apply_trades()` applies proposals using weighted-average book cost; `snapshot_holdings()` persists `holdings_snapshot_{portfolio_id}` dataset with shares, book cost, current price, market value, cost basis, unrealized gain, realized gain, and weight. Rebalance engine calls this automatically; `RebalanceResult` now includes `holdings_snapshot_path`.
-- 229 total tests pass (22 new holdings state tests).
-- Next: benchmark-relative analytics (attribution), HTML report output.
+- Factor attribution (`analytics/attribution.py`) implemented: returns-based style analysis using OLS regression of portfolio excess returns on long-short factor return series (momentum, low_volatility, liquidity). Reports per-factor beta, contribution, t-stat, alpha, R², residual volatility.
+- HTML report (`analytics/html_report.py`) implemented: self-contained HTML with metrics table, NAV chart (inline SVG with optional benchmark overlay), drawdown area chart, factor attribution table + horizontal bar chart, weight history stacked area chart. `alpha report --html <path>` flag added.
+- 268 total tests pass (27 new: 14 attribution + 13 HTML report).
 
 ## Steps
 

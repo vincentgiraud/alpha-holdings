@@ -35,3 +35,24 @@
 - Tests: unit/function tests in `tests/test_*.py`, BDD scenarios in `tests/bdd/`.
 - Run all tests: `uv run pytest -q`.
 - Lint/format: `uv run ruff check . && uv run ruff format --check .`
+
+## Development principles
+
+### TDD (Red → Green → Refactor)
+
+- **Write a failing test first.** No production code without a corresponding red test.
+- Get the test green with the simplest possible implementation — do not gold-plate on the first pass.
+- Refactor only after green. Each refactor must keep the suite green.
+- Run the full test suite (`uv run pytest -q`) after every change; never leave it red.
+
+### YAGNI (You Aren't Gonna Need It)
+
+- Only build what the current task requires — no speculative features, abstractions, or "just in case" code.
+- Do not add parameters, config knobs, or extension points for hypothetical future needs.
+- If a need isn't proven by a test or a current requirement, it doesn't belong in the codebase yet.
+
+### DRY (Don't Repeat Yourself)
+
+- Extract shared logic into a helper only when the same code appears in two or more places — not before.
+- Prefer small, focused functions over monoliths, but do not create abstractions for one-time operations.
+- Test helpers and fixtures in `conftest.py` count — deduplicate test setup the same way you deduplicate production code.

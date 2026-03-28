@@ -6,6 +6,7 @@ Entry points for workflows: refresh, score, construct, backtest, analyze, and re
 from datetime import date, timedelta
 from pathlib import Path
 
+import pandas as pd
 import typer
 
 app = typer.Typer(help="Alpha Holdings: Free-Data Upgradeable Strategy Engine")
@@ -341,6 +342,7 @@ def backtest(
 def report(
     benchmark: str = typer.Option("SPY", help="Benchmark symbol"),
     risk_free_rate: float = typer.Option(0.04, help="Annual risk-free rate"),
+    html: str | None = typer.Option(None, help="Output HTML report to this file path"),
 ):
     """Generate performance report from latest backtest results."""
     from alpha_holdings import config
@@ -371,6 +373,44 @@ def report(
     typer.echo(f"  Snapshot:  {rpt.snapshot_path}")
     typer.echo("")
     typer.echo(rpt.summary.to_string(index=False))
+
+    # Factor attribution
+    attribution = None
+    try:
+        from alpha_holdings.analytics import compute_factor_attribution
+
+        attribution = compute_factor_attribution(
+            storage=backend,
+            start_date=rpt.start_date,
+            end_date=rpt.end_date,
+            seed_universe_path=config.UNIVERSE_SEED_PATH,
+            risk_free_rate=risk_free_rate,
+        )
+        typer.echo("")
+        typer.echo("Factor Attribution:")
+        typer.echo(f"  Alpha (ann.):        {attribution.alpha_ann:.2%}")
+        typer.echo(f"  R²:                  {attribution.r_squared:.4f}")
+        typer.echo(f"  Residual Vol (ann.): {attribution.residual_vol_ann:.2%}")
+        for f in attribution.factors:
+            typer.echo(
+                f"  {f.name:<20s} β={f.beta:+.4f}  contrib={f.contribution_ann:+.2%}  t={f.t_stat:.2f}"
+            )
+    except (ValueError, Exception) as exc:
+        typer.secho(f"  Attribution skipped: {exc}", fg=typer.colors.YELLOW, err=True)
+
+    # HTML report
+    if html:
+        from alpha_holdings.analytics import render_html_report
+        from alpha_holdings.analytics.performance import _read_latest_backtest
+
+        nav_df = _read_latest_backtest(storage=backend)
+        html_path = render_html_report(
+            report=rpt,
+            nav_series=nav_df if nav_df is not None else pd.DataFrame(),
+            attribution=attribution,
+            output_path=Path(html),
+        )
+        typer.echo(f"\nHTML report written: {html_path}")
 
 
 def _parse_date_or_default(value: str | None, *, default: date) -> date:
