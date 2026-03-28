@@ -144,17 +144,18 @@ def run_backtest(
         "Results are indicative, not auditable performance."
     )
 
-    # Load fundamentals snapshots for all symbols (once, at the start)
-    fundamentals_by_symbol = _load_fundamentals_snapshots(
+    # Load fundamentals snapshot history for all symbols.
+    fundamentals_history = _load_fundamentals_snapshot_history(
         storage=storage,
         symbols=symbols,
     )
-    missing_fundamentals = len(set(symbols) - set(fundamentals_by_symbol))
+    missing_fundamentals = len(set(symbols) - set(fundamentals_history))
     if missing_fundamentals > 0:
         warnings.append(
             "Degraded execution: fundamentals snapshots unavailable for "
             f"{missing_fundamentals} symbol(s); price-only factors were used for those names."
         )
+    symbols_missing_point_in_time: set[str] = set()
 
     # 4. Walk-forward simulation
     nav = initial_value
@@ -172,6 +173,11 @@ def run_backtest(
             trailing_start = max(0, i - lookback_days)
             trailing_prices = price_matrix.iloc[trailing_start : i + 1]
             trailing_volumes = volume_matrix.iloc[trailing_start : i + 1]
+            fundamentals_for_trade_date = _select_fundamentals_as_of(
+                history=fundamentals_history,
+                trade_date=trade_date,
+            )
+            symbols_missing_point_in_time.update(set(symbols) - set(fundamentals_for_trade_date))
 
             if len(trailing_prices) >= 2:
                 new_weights = _score_and_construct(
@@ -180,7 +186,7 @@ def run_backtest(
                     constraints=constraints,
                     max_weight=float(constraints.max_single_name_weight),
                     min_holdings=constraints.min_holdings_count,
-                    fundamentals=fundamentals_by_symbol,
+                    fundamentals=fundamentals_for_trade_date,
                 )
                 if new_weights:
                     weights = new_weights
@@ -285,6 +291,12 @@ def run_backtest(
 
     # Build weight history DataFrame
     weight_history_df = pd.DataFrame(weight_snapshots) if weight_snapshots else None
+
+    if symbols_missing_point_in_time:
+        warnings.append(
+            "Degraded execution: fundamentals snapshots were not available on-or-before "
+            f"at least one rebalance date for {len(symbols_missing_point_in_time)} symbol(s)."
+        )
 
     return BacktestResult(
         start_date=start_date,
@@ -600,23 +612,56 @@ def _read_latest_dataset(*, storage: StorageBackend, dataset: str) -> pd.DataFra
         return None
 
 
-def _load_fundamentals_snapshots(
+def _load_fundamentals_snapshot_history(
     *,
     storage: StorageBackend,
     symbols: list[str],
-) -> dict[str, pd.DataFrame]:
-    """Load the latest fundamentals snapshot for each symbol.
+) -> dict[str, list[tuple[pd.Timestamp, pd.DataFrame]]]:
+    """Load all fundamentals snapshots for each symbol.
 
-    Returns a dict mapping symbol to its fundamentals DataFrame,
-    or empty dict if no fundamentals available.
+    Returns a dict mapping symbol to a sorted history list of
+    (snapshot_as_of_timestamp, fundamentals_dataframe).
     """
-    fundamentals: dict[str, pd.DataFrame] = {}
+    fundamentals: dict[str, list[tuple[pd.Timestamp, pd.DataFrame]]] = {}
     for symbol in symbols:
         dataset = f"{symbol.lower()}_fundamentals"
-        df = _read_latest_dataset(storage=storage, dataset=dataset)
-        if df is not None and not df.empty:
-            fundamentals[symbol] = df
+        snapshots = storage.list_snapshots(dataset_filter=dataset)
+        history: list[tuple[pd.Timestamp, pd.DataFrame]] = []
+        for snapshot in snapshots:
+            try:
+                df = pd.read_parquet(snapshot["snapshot_path"])
+            except (FileNotFoundError, KeyError):
+                continue
+            if df.empty:
+                continue
+            as_of = pd.Timestamp(snapshot["as_of"])
+            history.append((as_of, df))
+
+        if history:
+            history.sort(key=lambda item: item[0])
+            fundamentals[symbol] = history
+
     return fundamentals
+
+
+def _select_fundamentals_as_of(
+    *,
+    history: dict[str, list[tuple[pd.Timestamp, pd.DataFrame]]],
+    trade_date: pd.Timestamp,
+) -> dict[str, pd.DataFrame]:
+    """Select latest fundamentals snapshot at or before a trade date."""
+    selected: dict[str, pd.DataFrame] = {}
+    trade_day = pd.Timestamp(trade_date).date()
+
+    for symbol, snapshots in history.items():
+        eligible = [
+            (as_of, frame) for as_of, frame in snapshots if pd.Timestamp(as_of).date() <= trade_day
+        ]
+        if not eligible:
+            continue
+        selected[symbol] = eligible[-1][1]
+
+    return selected
 
 
 def _compute_fundamentals_metrics_backtest(

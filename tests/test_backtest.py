@@ -16,6 +16,7 @@ from alpha_holdings.backtest.runner import (
     _drift_weights,
     _generate_rebalance_dates,
     _score_and_construct,
+    _select_fundamentals_as_of,
     run_backtest,
 )
 from alpha_holdings.data.storage import LocalStorageBackend
@@ -165,6 +166,36 @@ class TestScoreAndConstruct:
         assert sum(weights.values()) == pytest.approx(1.0, abs=1e-6)
         # A has best momentum → should have highest weight
         assert weights["A"] > weights["B"]
+
+
+class TestFundamentalsSelection:
+    def test_selects_latest_snapshot_on_or_before_trade_date(self):
+        older = pd.DataFrame([{"net_income": 10.0, "revenue": 100.0}])
+        newer = pd.DataFrame([{"net_income": 20.0, "revenue": 100.0}])
+
+        history = {
+            "AAPL": [
+                (pd.Timestamp("2025-01-15"), older),
+                (pd.Timestamp("2025-02-20"), newer),
+            ]
+        }
+
+        selected = _select_fundamentals_as_of(
+            history=history, trade_date=pd.Timestamp("2025-02-10")
+        )
+
+        assert "AAPL" in selected
+        assert float(selected["AAPL"].iloc[0]["net_income"]) == 10.0
+
+    def test_does_not_select_future_snapshot(self):
+        future = pd.DataFrame([{"net_income": 30.0, "revenue": 100.0}])
+        history = {"MSFT": [(pd.Timestamp("2025-03-10"), future)]}
+
+        selected = _select_fundamentals_as_of(
+            history=history, trade_date=pd.Timestamp("2025-02-28")
+        )
+
+        assert "MSFT" not in selected
 
 
 # ---------------------------------------------------------------------------

@@ -12,14 +12,17 @@
 - Phases 1–7 complete.
 - Phase 7 step 17 delivered: construction/backtest degraded assumptions are annotated in CLI/report output.
 - Backtest warnings are now persisted in snapshot metadata and carried into performance reports.
-- Full verification pass complete: 294 tests pass; lint and format checks clean.
+- Phase 8 step 18 delivered: backtests now use fundamentals snapshots aligned to rebalance date (on-or-before selection).
+- Full verification pass complete: 296 tests pass; lint and format checks clean.
 - Release 0.1.0 remains current baseline.
 
 ## Upcoming Work
 
-### Next Planning
+### Phase 8
 
-- [ ] Define Phase 8 scope and priorities in PLAN.md.
+- [ ] Add seed universe/reference-data integrity checks for sector/country/benchmark completeness.
+- [ ] Extend reporting with holdings-state continuity metrics (cost basis and realized PnL rollforward).
+- [ ] Add machine-readable run manifests for workflow reproducibility and audit.
 
 ## Blocked
 

@@ -18,6 +18,7 @@ Build a Python-first research platform managed with uv, starting from free daily
 - [x] Phase 5 (Analytics workflows and full CLI surface): done
 - [x] Phase 6 (Upgrade-path hardening and final docs): done
 - [x] Phase 7 (Data quality hardening and realism): done
+- [ ] Phase 8 (Point-in-time rigor and operational polish): planned
 
 ## Steps
 
@@ -60,6 +61,14 @@ Build a Python-first research platform managed with uv, starting from free daily
 - [x] **16. Phase 7: Pydantic v2 cleanup.** Migrate remaining model `Config` usage to `ConfigDict` and remove deprecation warnings while preserving model behavior and existing public contracts. Depends on step 3.
 
 - [x] **17. Phase 7: Validation and operator ergonomics.** Add targeted tests and CLI/report annotations for degraded assumptions (missing sector metadata, missing fundamentals snapshots) so users can distinguish hard constraints from degraded execution paths at run time. Depends on steps 14 and 15.
+
+- [x] **18. Phase 8: Fundamentals period alignment.** Replace latest-available fundamentals fallback in backtests with period-aligned snapshot selection keyed by rebalance date (prefer latest filing published on or before trade date). Preserve explicit degraded-mode signaling when no eligible snapshot exists. Depends on steps 10, 15, and 17.
+
+- [ ] **19. Phase 8: Sector and reference-data coverage hardening.** Expand and validate seed-universe reference coverage (sector/country/benchmark fields) with deterministic integrity checks that fail fast on missing mandatory fields. Keep controlled fallback for optional fields only. Depends on steps 7, 14, and 17.
+
+- [ ] **20. Phase 8: Holdings state analytics continuity.** Extend reporting to incorporate holdings state continuity across rebalance snapshots (cost basis drift, realized gain/loss rollforward) so operator reports reflect both NAV and holdings-led PnL transitions. Depends on steps 10, 11, and 17.
+
+- [ ] **21. Phase 8: CLI diagnostics and run manifests.** Add a machine-readable run manifest per workflow execution (refresh/score/construct/rebalance/backtest/report) capturing input config, data snapshot IDs, warnings, and output artifacts for reproducible audit trails. Depends on steps 6, 11, and 17.
 
 ## Verification
 
