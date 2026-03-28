@@ -8,23 +8,15 @@
 - It should summarize deltas from the roadmap in `PLAN.md`, not restate the full plan.
 
 ## Now
-- Phases 1–4 complete. Phase 5 nearing completion. Phase 6 hardening ongoing.
-- Factor attribution via returns-based style analysis implemented (`analytics/attribution.py`).
-- HTML report output implemented (`analytics/html_report.py`) with NAV chart, drawdown chart, attribution bars, weight history stacked area.
-- Backtest now tracks `weight_history` at each rebalance for visualization.
-- `alpha report --html <path>` generates self-contained HTML report with all sections.
-- 268 tests pass (241 prior + 27 new). Lint and format clean.
+- Phases 1–5 complete. Phase 6 nearing completion.
+- Contract compliance and upgrade-path validation tests added (`tests/test_upgrade_path.py`, 22 tests).
+- README.md fully rewritten with complete architecture, CLI commands, free-data limitations, and upgrade-path instructions.
+- 290 tests pass. Lint and format clean.
 
 ## Upcoming Work
 
-### Phase 5
-(All major items complete.)
-
 ### Phase 6
-- [ ] Contract compliance tests for multi-vendor scenarios
-- [ ] Upgrade-path validation (mock paid provider)
-- [ ] Final documentation and README updates
-- [ ] Release 0.1.0 checklist
+- [ ] Release 0.1.0 checklist (version bump, changelog, final pass)
 
 ## Blocked
 - No hard blockers currently.
@@ -41,3 +33,5 @@
 - All tests: `uv run pytest -q`
 - Unit/function tests: `uv run pytest tests/test_models.py tests/test_profiles.py tests/test_analytics.py -q`
 - BDD scenarios: `uv run pytest tests/bdd -q`
+- Provider contracts: `uv run pytest tests/test_provider_contracts.py -q`
+- Upgrade-path validation: `uv run pytest tests/test_upgrade_path.py -q`

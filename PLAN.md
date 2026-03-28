@@ -15,17 +15,13 @@ Build a Python-first research platform managed with uv, starting from free daily
 - [x] Phase 2 (Provider abstraction/adapters/normalization/storage): done
 - [x] Phase 3 (Universe and scoring): done
 - [x] Phase 4 (Construction/rebalance/backtest): done
-- [ ] Phase 5 (Analytics workflows and full CLI surface): in progress
+- [x] Phase 5 (Analytics workflows and full CLI surface): done
 - [ ] Phase 6 (Upgrade-path hardening and final docs): in progress
 
-Phase 5 progress notes (remove when phase completes):
-- Rebalance engine (`alpha rebalance`) implemented: reads latest target vs. prior weights, generates buy/sell trade proposals with share counts and values from latest prices, persists as `trade_proposals` snapshot.
-- Backtest runner (`alpha backtest`) implemented: walk-forward simulation over stored price data with in-memory scoring at each rebalance date, daily NAV tracking with weight drift, configurable frequency (weekly/monthly/quarterly), benchmark comparison. Now also tracks `weight_history` DataFrame at each rebalance for visualization.
-- Performance report (`alpha report`) implemented: reads backtest NAV series and computes total/annualized return, volatility, Sharpe, max drawdown, Calmar ratio, best/worst day, benchmark-relative metrics (excess return, tracking error, information ratio), persists as `performance_report` snapshot.
-- Portfolio snapshot persistence (`portfolio/state.py`) implemented: `apply_trades()` applies proposals using weighted-average book cost; `snapshot_holdings()` persists `holdings_snapshot_{portfolio_id}` dataset with shares, book cost, current price, market value, cost basis, unrealized gain, realized gain, and weight. Rebalance engine calls this automatically; `RebalanceResult` now includes `holdings_snapshot_path`.
-- Factor attribution (`analytics/attribution.py`) implemented: returns-based style analysis using OLS regression of portfolio excess returns on long-short factor return series (momentum, low_volatility, liquidity). Reports per-factor beta, contribution, t-stat, alpha, R², residual volatility.
-- HTML report (`analytics/html_report.py`) implemented: self-contained HTML with metrics table, NAV chart (inline SVG with optional benchmark overlay), drawdown area chart, factor attribution table + horizontal bar chart, weight history stacked area chart. `alpha report --html <path>` flag added.
-- 268 total tests pass (27 new: 14 attribution + 13 HTML report).
+Phase 6 progress notes (remove when phase completes):
+- Upgrade-path validation (`tests/test_upgrade_path.py`): 22 tests proving mock paid providers work end-to-end through refresh → score → construct. Tests cover multi-vendor refresh, scoring with paid fundamentals, construction constraints, normalization schema invariants, and provider-swap comparison showing rankings change when fundamentals factors are added.
+- Contract compliance tests in `tests/test_provider_contracts.py` validate structural identity, output schema, capability gating, free adapter capabilities, mock paid adapter contracts, composite multi-interface providers, and free-vs-paid schema parity.
+- README.md updated with complete architecture, all CLI commands, free-data limitations, and the exact upgrade-path process for adding a paid provider.
 
 ## Steps
 
@@ -55,11 +51,11 @@ Phase 5 progress notes (remove when phase completes):
 
 - [x] **10. Phase 4: Rebalancing and backtesting.** Build the rebalance engine and historical runner around point-in-time snapshots where available, and add explicit warnings when free-source data forces weaker assumptions. Depends on steps 6 through 9.
 
-- [ ] **11. Phase 5: Analytics and operator surface.** Add CLI workflows for refresh, normalize, score, construct, rebalance, backtest, and report, along with portfolio, benchmark, and attribution analytics. Depends on steps 6 through 10.
+- [x] **11. Phase 5: Analytics and operator surface.** Add CLI workflows for refresh, normalize, score, construct, rebalance, backtest, and report, along with portfolio, benchmark, and attribution analytics. Depends on steps 6 through 10.
 
-- [ ] **12. Phase 6: Upgrade path hardening.** Add tests focused on contract compliance, provider parity, normalization invariants, and benchmark-relative risk controls so a future paid vendor can be introduced with adapter-level validation rather than system-wide rewrites. Depends on steps 4 through 11.
+- [x] **12. Phase 6: Upgrade path hardening.** Add tests focused on contract compliance, provider parity, normalization invariants, and benchmark-relative risk controls so a future paid vendor can be introduced with adapter-level validation rather than system-wide rewrites. Depends on steps 4 through 11.
 
-- [ ] **13. Phase 6: Documentation.** Document the free-data limitations, upgrade seams, supported workflows, and the exact process for adding a paid provider implementation later. Depends on all prior steps.
+- [x] **13. Phase 6: Documentation.** Document the free-data limitations, upgrade seams, supported workflows, and the exact process for adding a paid provider implementation later. Depends on all prior steps.
 
 ## Verification
 
