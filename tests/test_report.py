@@ -4,7 +4,7 @@ Validates metric computation: returns, volatility, Sharpe, drawdown,
 benchmark-relative metrics, edge cases, and snapshot persistence.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -369,6 +369,108 @@ class TestGenerateReport:
         note = report.summary[report.summary["metric"] == "Data Quality Assumptions"]
         assert not note.empty
         assert "missing sector metadata" in str(note.iloc[0]["value"]).lower()
+
+    def test_includes_holdings_rollforward_metrics_when_snapshots_exist(self, tmp_path):
+        backend = _make_backend(tmp_path)
+
+        nav_df = _make_nav_series(n_days=30)
+        as_of = datetime.now(tz=UTC)
+        rows = nav_df.to_dict(orient="records")
+        backtest_path = backend.write_normalized_snapshot(
+            dataset="backtest_results",
+            as_of=as_of,
+            rows=rows,
+        )
+        backend.register_snapshot(
+            dataset="backtest_results",
+            as_of=as_of,
+            snapshot_path=backtest_path,
+            row_count=len(rows),
+            metadata={"portfolio_id": "backtest"},
+        )
+
+        prev_as_of = as_of - timedelta(hours=1)
+        prev_holdings = [
+            {
+                "portfolio_id": "backtest",
+                "as_of_date": prev_as_of.isoformat(),
+                "symbol": "AAPL",
+                "shares": 10.0,
+                "book_cost_per_share": 100.0,
+                "current_price": 110.0,
+                "market_value": 1100.0,
+                "cost_basis_total": 1000.0,
+                "unrealized_gain": 100.0,
+                "realized_gain_total": 1000.0,
+                "weight": 0.5,
+            }
+        ]
+        prev_path = backend.write_normalized_snapshot(
+            dataset="holdings_snapshot_backtest",
+            as_of=prev_as_of,
+            rows=prev_holdings,
+        )
+        backend.register_snapshot(
+            dataset="holdings_snapshot_backtest",
+            as_of=prev_as_of,
+            snapshot_path=prev_path,
+            row_count=len(prev_holdings),
+            metadata={"portfolio_id": "backtest"},
+        )
+
+        latest_holdings = [
+            {
+                "portfolio_id": "backtest",
+                "as_of_date": as_of.isoformat(),
+                "symbol": "AAPL",
+                "shares": 10.0,
+                "book_cost_per_share": 100.0,
+                "current_price": 120.0,
+                "market_value": 1200.0,
+                "cost_basis_total": 1000.0,
+                "unrealized_gain": 200.0,
+                "realized_gain_total": 1400.0,
+                "weight": 0.6,
+            },
+            {
+                "portfolio_id": "backtest",
+                "as_of_date": as_of.isoformat(),
+                "symbol": "MSFT",
+                "shares": 5.0,
+                "book_cost_per_share": 200.0,
+                "current_price": 210.0,
+                "market_value": 1050.0,
+                "cost_basis_total": 1000.0,
+                "unrealized_gain": 50.0,
+                "realized_gain_total": 0.0,
+                "weight": 0.4,
+            },
+        ]
+        latest_path = backend.write_normalized_snapshot(
+            dataset="holdings_snapshot_backtest",
+            as_of=as_of,
+            rows=latest_holdings,
+        )
+        backend.register_snapshot(
+            dataset="holdings_snapshot_backtest",
+            as_of=as_of,
+            snapshot_path=latest_path,
+            row_count=len(latest_holdings),
+            metadata={"portfolio_id": "backtest"},
+        )
+
+        report = generate_report(storage=backend, portfolio_id="backtest")
+
+        assert report.holdings_count == 2
+        assert report.realized_gain_total == pytest.approx(1400.0)
+        assert report.unrealized_gain_total == pytest.approx(250.0)
+        assert report.realized_gain_since_prior == pytest.approx(400.0)
+
+        realized_delta = report.summary[
+            report.summary["metric"] == "Realized Gain Since Prior Snapshot"
+        ]
+        assert not realized_delta.empty
+        assert "400.00" in str(realized_delta.iloc[0]["value"])
 
 
 # ---------------------------------------------------------------------------

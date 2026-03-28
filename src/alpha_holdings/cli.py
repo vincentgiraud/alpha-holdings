@@ -3,7 +3,8 @@
 Entry points for workflows: refresh, score, construct, backtest, analyze, and report.
 """
 
-from datetime import date, timedelta
+import json
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -78,6 +79,28 @@ def refresh(
     typer.echo(f"  Snapshots: {summary.snapshots_written}")
     if summary.failures:
         typer.echo(f"  Failed tickers: {', '.join(summary.failures)}")
+
+    manifest_path = _write_run_manifest(
+        storage=backend,
+        workflow="refresh",
+        inputs={
+            "universe": str(universe_path),
+            "start_date": parsed_start.isoformat(),
+            "end_date": parsed_end.isoformat(),
+            "preferred_source": config.DATA_SOURCE,
+            "fallback_source": config.FALLBACK_DATA_SOURCE,
+        },
+        outputs={
+            "tickers_requested": summary.tickers_requested,
+            "tickers_succeeded": summary.tickers_succeeded,
+            "tickers_failed": summary.tickers_failed,
+            "price_snapshots_written": summary.price_snapshots_written,
+            "fundamentals_snapshots_written": summary.fundamentals_snapshots_written,
+            "snapshot_paths": [str(path) for path in summary.snapshot_paths],
+        },
+        warnings=summary.failures,
+    )
+    typer.echo(f"  Manifest:  {manifest_path}")
 
 
 @app.command(name="list-snapshots")
@@ -193,6 +216,25 @@ def score(date: str = typer.Option(..., help="Score as-of date prefix (YYYY-MM-D
         ].to_string(index=False)
     )
 
+    manifest_path = _write_run_manifest(
+        storage=backend,
+        workflow="score",
+        inputs={
+            "as_of": date,
+            "lookback_days": config.SCORE_LOOKBACK_DAYS,
+            "min_avg_dollar_volume": config.UNIVERSE_MIN_AVG_DOLLAR_VOLUME,
+            "seed_universe_path": str(config.UNIVERSE_SEED_PATH),
+            "base_currency": config.UNIVERSE_BASE_CURRENCY,
+        },
+        outputs={
+            "universe_size": summary.universe_size,
+            "securities_scored": summary.securities_scored,
+            "snapshot_path": str(summary.snapshot_path),
+        },
+        warnings=summary.skipped,
+    )
+    typer.echo(f"Manifest written: {manifest_path}")
+
 
 @app.command()
 def construct(date: str = typer.Option(..., help="Construction date (YYYY-MM-DD)")):
@@ -237,6 +279,19 @@ def construct(date: str = typer.Option(..., help="Construction date (YYYY-MM-DD)
             index=False
         )
     )
+
+    manifest_path = _write_run_manifest(
+        storage=backend,
+        workflow="construct",
+        inputs={"as_of": date, "seed_universe_path": str(config.UNIVERSE_SEED_PATH)},
+        outputs={
+            "portfolio_id": result.portfolio_id,
+            "holdings_count": result.holdings_count,
+            "snapshot_path": str(result.snapshot_path),
+        },
+        warnings=result.warnings,
+    )
+    typer.echo(f"Manifest written: {manifest_path}")
 
 
 @app.command()
@@ -287,6 +342,25 @@ def rebalance(
             "weight_change",
         ]
         typer.echo(result.proposals[display_cols].to_string(index=False))
+
+    manifest_path = _write_run_manifest(
+        storage=backend,
+        workflow="rebalance",
+        inputs={
+            "as_of": date,
+            "portfolio_value": portfolio_value,
+            "seed_universe_path": str(config.UNIVERSE_SEED_PATH),
+        },
+        outputs={
+            "portfolio_id": result.portfolio_id,
+            "trades_count": result.trades_count,
+            "snapshot_path": str(result.snapshot_path),
+            "holdings_snapshot_path": (
+                str(result.holdings_snapshot_path) if result.holdings_snapshot_path else None
+            ),
+        },
+    )
+    typer.echo(f"Manifest written: {manifest_path}")
 
 
 @app.command()
@@ -340,6 +414,26 @@ def backtest(
         typer.echo("")
         for w in result.warnings:
             typer.secho(f"  ⚠ {w}", fg=typer.colors.YELLOW)
+
+    manifest_path = _write_run_manifest(
+        storage=backend,
+        workflow="backtest",
+        inputs={
+            "start_date": start_date,
+            "end_date": end_date,
+            "rebalance_freq": rebalance_freq,
+            "benchmark": benchmark,
+            "lookback_days": config.SCORE_LOOKBACK_DAYS,
+            "seed_universe_path": str(config.UNIVERSE_SEED_PATH),
+        },
+        outputs={
+            "rebalance_count": result.rebalance_count,
+            "total_return": result.total_return,
+            "snapshot_path": str(result.snapshot_path),
+        },
+        warnings=result.warnings,
+    )
+    typer.echo(f"  Manifest:         {manifest_path}")
 
 
 @app.command()
@@ -420,6 +514,23 @@ def report(
         )
         typer.echo(f"\nHTML report written: {html_path}")
 
+    manifest_path = _write_run_manifest(
+        storage=backend,
+        workflow="report",
+        inputs={
+            "benchmark": benchmark,
+            "risk_free_rate": risk_free_rate,
+            "html": html,
+        },
+        outputs={
+            "portfolio_id": rpt.portfolio_id,
+            "snapshot_path": str(rpt.snapshot_path),
+            "html_path": str(html_path) if html else None,
+        },
+        warnings=rpt.degraded_assumptions,
+    )
+    typer.echo(f"Manifest written: {manifest_path}")
+
 
 def _parse_date_or_default(value: str | None, *, default: date) -> date:
     if not value:
@@ -432,6 +543,46 @@ def _database_path_from_url(database_url: str) -> Path:
     if database_url.startswith(prefix):
         return Path(database_url[len(prefix) :])
     return Path(database_url)
+
+
+def _write_run_manifest(
+    *,
+    storage,
+    workflow: str,
+    inputs: dict[str, object],
+    outputs: dict[str, object],
+    warnings: list[str] | None = None,
+) -> Path:
+    """Persist a machine-readable workflow execution manifest."""
+    run_as_of = datetime.now(tz=UTC)
+    warning_list = list(warnings or [])
+    row = {
+        "run_id": run_as_of.isoformat(),
+        "workflow": workflow,
+        "status": "success",
+        "inputs_json": json.dumps(inputs, sort_keys=True, default=str),
+        "outputs_json": json.dumps(outputs, sort_keys=True, default=str),
+        "warnings_json": json.dumps(warning_list, sort_keys=True, default=str),
+    }
+
+    path = storage.write_normalized_snapshot(
+        dataset="run_manifests",
+        as_of=run_as_of,
+        rows=[row],
+    )
+    storage.register_snapshot(
+        dataset="run_manifests",
+        as_of=run_as_of,
+        snapshot_path=path,
+        row_count=1,
+        metadata={
+            "workflow": workflow,
+            "status": "success",
+            "warnings_count": len(warning_list),
+            "outputs": outputs,
+        },
+    )
+    return path
 
 
 if __name__ == "__main__":

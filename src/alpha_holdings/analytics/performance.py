@@ -40,6 +40,10 @@ class PerformanceReport:
     snapshot_path: Path
     summary: pd.DataFrame
     degraded_assumptions: list[str] = field(default_factory=list)
+    holdings_count: int | None = None
+    realized_gain_total: float | None = None
+    unrealized_gain_total: float | None = None
+    realized_gain_since_prior: float | None = None
 
 
 def generate_report(
@@ -69,6 +73,10 @@ def generate_report(
 
     raw_warnings = backtest_metadata.get("warnings", [])
     degraded_assumptions = [str(w) for w in raw_warnings] if isinstance(raw_warnings, list) else []
+    holdings_summary = _read_holdings_rollforward_summary(
+        storage=storage,
+        portfolio_id=portfolio_id,
+    )
 
     return compute_report_from_nav(
         nav_series=nav_df,
@@ -77,6 +85,7 @@ def generate_report(
         risk_free_rate=risk_free_rate,
         benchmark_symbol=benchmark_symbol,
         degraded_assumptions=degraded_assumptions,
+        holdings_summary=holdings_summary,
     )
 
 
@@ -88,6 +97,7 @@ def compute_report_from_nav(
     risk_free_rate: float = 0.04,
     benchmark_symbol: str = "SPY",
     degraded_assumptions: list[str] | None = None,
+    holdings_summary: dict[str, float | int | str | None] | None = None,
 ) -> PerformanceReport:
     """Compute performance report from a NAV DataFrame.
 
@@ -197,6 +207,30 @@ def compute_report_from_nav(
             "metric": "Data Quality Assumptions",
             "value": " | ".join(degraded_assumptions) if degraded_assumptions else "None",
         },
+        {
+            "metric": "Holdings Count",
+            "value": str(holdings_summary.get("holdings_count"))
+            if holdings_summary and holdings_summary.get("holdings_count") is not None
+            else "N/A",
+        },
+        {
+            "metric": "Realized Gain Total",
+            "value": f"{float(holdings_summary['realized_gain_total']):,.2f}"
+            if holdings_summary and holdings_summary.get("realized_gain_total") is not None
+            else "N/A",
+        },
+        {
+            "metric": "Unrealized Gain Total",
+            "value": f"{float(holdings_summary['unrealized_gain_total']):,.2f}"
+            if holdings_summary and holdings_summary.get("unrealized_gain_total") is not None
+            else "N/A",
+        },
+        {
+            "metric": "Realized Gain Since Prior Snapshot",
+            "value": f"{float(holdings_summary['realized_gain_since_prior']):,.2f}"
+            if holdings_summary and holdings_summary.get("realized_gain_since_prior") is not None
+            else "N/A",
+        },
     ]
     summary_df = pd.DataFrame(summary_rows)
 
@@ -221,6 +255,7 @@ def compute_report_from_nav(
             "sharpe_ratio": round(sharpe, 4),
             "max_drawdown": round(max_dd, 6),
             "degraded_assumptions": degraded_assumptions or [],
+            "holdings_summary": holdings_summary or {},
         },
     )
 
@@ -244,6 +279,26 @@ def compute_report_from_nav(
         snapshot_path=snapshot_path,
         summary=summary_df,
         degraded_assumptions=list(degraded_assumptions or []),
+        holdings_count=(
+            int(holdings_summary["holdings_count"])
+            if holdings_summary and holdings_summary.get("holdings_count") is not None
+            else None
+        ),
+        realized_gain_total=(
+            float(holdings_summary["realized_gain_total"])
+            if holdings_summary and holdings_summary.get("realized_gain_total") is not None
+            else None
+        ),
+        unrealized_gain_total=(
+            float(holdings_summary["unrealized_gain_total"])
+            if holdings_summary and holdings_summary.get("unrealized_gain_total") is not None
+            else None
+        ),
+        realized_gain_since_prior=(
+            float(holdings_summary["realized_gain_since_prior"])
+            if holdings_summary and holdings_summary.get("realized_gain_since_prior") is not None
+            else None
+        ),
     )
 
 
@@ -274,6 +329,60 @@ def _read_latest_backtest_with_metadata(
         )
     except FileNotFoundError:
         return None, dict(latest.get("metadata", {}))
+
+
+def _read_holdings_rollforward_summary(
+    *,
+    storage: StorageBackend,
+    portfolio_id: str,
+) -> dict[str, float | int | str | None] | None:
+    """Read latest holdings snapshot and derive continuity rollforward metrics."""
+    dataset = f"holdings_snapshot_{portfolio_id}"
+    snapshots = storage.list_snapshots(dataset_filter=dataset)
+    if not snapshots:
+        return None
+
+    ordered = sorted(snapshots, key=lambda s: str(s["as_of"]), reverse=True)
+    latest = ordered[0]
+    try:
+        latest_df = pd.read_parquet(latest["snapshot_path"])
+    except (FileNotFoundError, KeyError):
+        return None
+
+    if latest_df.empty:
+        return {
+            "holdings_count": 0,
+            "realized_gain_total": 0.0,
+            "unrealized_gain_total": 0.0,
+            "realized_gain_since_prior": None,
+        }
+
+    realized_latest = float(
+        pd.to_numeric(latest_df.get("realized_gain_total"), errors="coerce").fillna(0).sum()
+    )
+    unrealized_latest = float(
+        pd.to_numeric(latest_df.get("unrealized_gain"), errors="coerce").fillna(0).sum()
+    )
+
+    realized_since_prior: float | None = None
+    if len(ordered) > 1:
+        prior = ordered[1]
+        try:
+            prior_df = pd.read_parquet(prior["snapshot_path"])
+        except (FileNotFoundError, KeyError):
+            prior_df = None
+        if prior_df is not None and not prior_df.empty:
+            realized_prior = float(
+                pd.to_numeric(prior_df.get("realized_gain_total"), errors="coerce").fillna(0).sum()
+            )
+            realized_since_prior = realized_latest - realized_prior
+
+    return {
+        "holdings_count": len(latest_df),
+        "realized_gain_total": realized_latest,
+        "unrealized_gain_total": unrealized_latest,
+        "realized_gain_since_prior": realized_since_prior,
+    }
 
 
 def _compute_max_drawdown(nav_array: np.ndarray) -> float:

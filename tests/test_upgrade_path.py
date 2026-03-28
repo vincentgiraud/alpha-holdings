@@ -170,11 +170,31 @@ def mini_universe_csv(tmp_path: Path) -> Path:
     with csv_path.open("w", newline="") as fh:
         writer = csv.writer(fh)
         writer.writerow(
-            ["symbol", "security_id", "isin", "name", "country", "currency", "region", "benchmark"]
+            [
+                "symbol",
+                "security_id",
+                "isin",
+                "name",
+                "country",
+                "currency",
+                "region",
+                "benchmark",
+                "sector",
+            ]
         )
         for sym in _SYMBOLS:
             writer.writerow(
-                [sym, f"US_{sym}", f"US0000{sym}", f"{sym} Inc.", "US", "USD", "US", "SPY"]
+                [
+                    sym,
+                    f"US_{sym}",
+                    f"US0000{sym}",
+                    f"{sym} Inc.",
+                    "US",
+                    "USD",
+                    "US",
+                    "SPY",
+                    "Technology",
+                ]
             )
     return csv_path
 
@@ -515,11 +535,22 @@ class TestProviderSwapComparison:
                     "currency",
                     "region",
                     "benchmark",
+                    "sector",
                 ]
             )
             for sym in _SYMBOLS:
                 writer.writerow(
-                    [sym, f"US_{sym}", f"US0000{sym}", f"{sym} Inc.", "US", "USD", "US", "SPY"]
+                    [
+                        sym,
+                        f"US_{sym}",
+                        f"US0000{sym}",
+                        f"{sym} Inc.",
+                        "US",
+                        "USD",
+                        "US",
+                        "SPY",
+                        "Technology",
+                    ]
                 )
 
         import alpha_holdings.data.refresh as refresh_mod

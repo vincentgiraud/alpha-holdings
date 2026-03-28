@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import duckdb
+import pytest
 
 from alpha_holdings.data.storage import LocalStorageBackend
 from alpha_holdings.scoring import score_equities_from_snapshots
@@ -94,6 +95,96 @@ def test_build_liquid_universe_uses_seed_membership_and_currency_normalization(t
         ].item()
         is False
     )
+
+
+def test_build_liquid_universe_raises_on_missing_required_reference_columns(tmp_path):
+    backend = LocalStorageBackend(
+        root_path=tmp_path / "data",
+        database_path=tmp_path / "alpha.duckdb",
+    )
+    as_of = datetime(2026, 3, 23, 12, 0, 0, tzinfo=UTC)
+    _write_price_snapshot(
+        backend, "aapl_prices", "AAPL", as_of, base_close=100.0, base_volume=1_000_000
+    )
+
+    bad_seed = tmp_path / "bad_seed.csv"
+    bad_seed.write_text(
+        "symbol,security_id,isin,name,country,currency,region\n"
+        "AAPL,AAPL,US0000AAPL,Apple Inc.,US,USD,US\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="missing required columns"):
+        build_liquid_universe_from_snapshots(
+            storage=backend,
+            as_of="2026-03-23",
+            lookback_days=5,
+            min_avg_dollar_volume=100_000,
+            seed_universe_path=bad_seed,
+        )
+
+
+def test_build_liquid_universe_raises_on_empty_required_reference_values(tmp_path):
+    backend = LocalStorageBackend(
+        root_path=tmp_path / "data",
+        database_path=tmp_path / "alpha.duckdb",
+    )
+    as_of = datetime(2026, 3, 23, 12, 0, 0, tzinfo=UTC)
+    _write_price_snapshot(
+        backend, "aapl_prices", "AAPL", as_of, base_close=100.0, base_volume=1_000_000
+    )
+
+    bad_seed = tmp_path / "bad_seed_empty.csv"
+    bad_seed.write_text(
+        "symbol,security_id,isin,name,country,currency,region,benchmark,sector\n"
+        "AAPL,AAPL,US0000AAPL,Apple Inc.,US,USD,US,,Technology\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="empty required values"):
+        build_liquid_universe_from_snapshots(
+            storage=backend,
+            as_of="2026-03-23",
+            lookback_days=5,
+            min_avg_dollar_volume=100_000,
+            seed_universe_path=bad_seed,
+        )
+
+
+def test_build_liquid_universe_keeps_optional_field_fallbacks(tmp_path):
+    backend = LocalStorageBackend(
+        root_path=tmp_path / "data",
+        database_path=tmp_path / "alpha.duckdb",
+    )
+    as_of = datetime(2026, 3, 23, 12, 0, 0, tzinfo=UTC)
+
+    _write_price_snapshot(
+        backend,
+        "aapl_prices",
+        "AAPL",
+        as_of,
+        base_close=100.0,
+        base_volume=1_000_000,
+    )
+
+    seed_path = tmp_path / "seed_min_optional.csv"
+    seed_path.write_text(
+        "symbol,name,country,currency,region,benchmark,sector\n"
+        "AAPL,Apple Inc.,US,USD,US,SPY,Technology\n",
+        encoding="utf-8",
+    )
+
+    universe = build_liquid_universe_from_snapshots(
+        storage=backend,
+        as_of="2026-03-23",
+        lookback_days=5,
+        min_avg_dollar_volume=100_000,
+        seed_universe_path=seed_path,
+    )
+
+    assert universe.symbols == ["AAPL"]
+    assert universe.members.iloc[0]["security_id"] == "AAPL"
+    assert universe.members.iloc[0]["isin"] == "AAPL"
 
 
 def test_score_equities_from_snapshots_computes_factor_contributions_and_registers_snapshot(

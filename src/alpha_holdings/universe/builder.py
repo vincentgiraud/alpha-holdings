@@ -13,6 +13,7 @@ from alpha_holdings.data.storage import StorageBackend
 DEFAULT_SEED_UNIVERSE_PATH = (
     Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "seed_universe.csv"
 )
+_REQUIRED_REFERENCE_COLUMNS = ("symbol", "country", "sector", "benchmark")
 
 
 @dataclass(slots=True)
@@ -140,16 +141,33 @@ def _load_seed_universe(path: Path | None) -> pd.DataFrame:
             ]
         )
     frame = pd.read_csv(path)
-    if "symbol" not in frame.columns:
-        raise ValueError(f"Seed universe file {path} must include a 'symbol' column.")
+    missing_cols = [c for c in _REQUIRED_REFERENCE_COLUMNS if c not in frame.columns]
+    if missing_cols:
+        required = ", ".join(_REQUIRED_REFERENCE_COLUMNS)
+        missing = ", ".join(missing_cols)
+        raise ValueError(
+            f"Seed universe file {path} is missing required columns: {missing}. "
+            f"Required columns: {required}."
+        )
+
     normalized = frame.copy()
-    normalized["symbol"] = normalized["symbol"].astype(str).str.upper().str.strip()
+    normalized["symbol"] = normalized["symbol"].fillna("").astype(str).str.upper().str.strip()
+    normalized["country"] = normalized["country"].fillna("").astype(str).str.strip()
+    normalized["sector"] = normalized["sector"].fillna("").astype(str).str.strip()
+    normalized["benchmark"] = normalized["benchmark"].fillna("").astype(str).str.strip()
+
+    for column in _REQUIRED_REFERENCE_COLUMNS:
+        empty_count = int(normalized[column].eq("").sum())
+        if empty_count > 0:
+            raise ValueError(
+                "Seed universe reference data contains empty required values: "
+                f"column '{column}' has {empty_count} empty row(s)."
+            )
+
     if "security_id" not in normalized.columns:
         normalized["security_id"] = normalized["symbol"]
     if "isin" not in normalized.columns:
         normalized["isin"] = normalized.get("security_id", normalized["symbol"])
-    if "benchmark" not in normalized.columns:
-        normalized["benchmark"] = None
     return normalized
 
 

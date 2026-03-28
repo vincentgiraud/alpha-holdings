@@ -28,6 +28,7 @@ class RefreshSummary:
     price_snapshots_written: int
     fundamentals_snapshots_written: int
     failures: list[str]
+    snapshot_paths: list[Path]
 
     @property
     def snapshots_written(self) -> int:
@@ -56,6 +57,7 @@ def refresh_prices(
 
     universe_rows = _load_universe_rows(universe_path)
     failures: list[str] = []
+    snapshot_paths: list[Path] = []
     price_snapshots_written = 0
     fundamentals_snapshots_written = 0
     succeeded = 0
@@ -104,6 +106,7 @@ def refresh_prices(
                 "end_date": end_date.isoformat(),
             },
         )
+        snapshot_paths.append(snapshot_path)
         price_snapshots_written += 1
 
         fundamentals = _fetch_fundamentals_if_available(
@@ -137,6 +140,7 @@ def refresh_prices(
                     "source": fundamentals_provider.source_id,
                 },
             )
+            snapshot_paths.append(fundamentals_snapshot_path)
             fundamentals_snapshots_written += 1
         succeeded += 1
 
@@ -147,6 +151,7 @@ def refresh_prices(
         price_snapshots_written=price_snapshots_written,
         fundamentals_snapshots_written=fundamentals_snapshots_written,
         failures=failures,
+        snapshot_paths=snapshot_paths,
     )
 
 
