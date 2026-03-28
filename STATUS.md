@@ -9,21 +9,12 @@
 
 ## Now
 
-- Phases 1–8 complete.
-- Phase 7 step 17 delivered: construction/backtest degraded assumptions are annotated in CLI/report output.
-- Backtest warnings are now persisted in snapshot metadata and carried into performance reports.
-- Phase 8 step 18 delivered: backtests now use fundamentals snapshots aligned to rebalance date (on-or-before selection).
-- Phase 8 step 19 delivered: seed reference data now fails fast on missing sector/country/benchmark fields.
-- Phase 8 step 20 delivered: performance reports now include holdings continuity (realized/unrealized totals and rollforward delta).
-- Phase 8 step 21 delivered: CLI workflows now write machine-readable run manifests with inputs, outputs, warnings, and artifact paths.
-- Full verification pass complete: 302 tests pass; lint and format checks clean.
-- Release 0.1.0 remains current baseline.
+- Phases 1–9 complete. 318 tests pass (34 BDD scenarios); lint and format checks clean.
+- Bug fix: wealth probability formula corrected (CDF → survival function) — caught by BDD scenario.
 
 ## Upcoming Work
 
-### Next Planning
-
-- [ ] Define Phase 9 scope and priorities in PLAN.md.
+No open work items. All planned phases complete.
 
 ## Blocked
 

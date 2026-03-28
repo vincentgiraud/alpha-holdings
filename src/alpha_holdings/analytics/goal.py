@@ -146,7 +146,9 @@ class GoalAnalytics:
         # Normal CDF approximation (simple; use scipy.stats.norm in production)
         from math import erf
 
-        prob = (1.0 + erf(z_score / (2**0.5))) / 2.0
+        # P(return >= required) = 1 - Φ(z) = (1 - erf(z/√2)) / 2
+        cdf = (1.0 + erf(z_score / (2**0.5))) / 2.0
+        prob = 1.0 - cdf
         return Decimal(str(prob))
 
     @staticmethod

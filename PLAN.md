@@ -19,6 +19,7 @@ Build a Python-first research platform managed with uv, starting from free daily
 - [x] Phase 6 (Upgrade-path hardening and final docs): done
 - [x] Phase 7 (Data quality hardening and realism): done
 - [x] Phase 8 (Point-in-time rigor and operational polish): done
+- [x] Phase 9 (BDD scenario coverage expansion): done
 
 ## Steps
 
@@ -70,6 +71,14 @@ Build a Python-first research platform managed with uv, starting from free daily
 
 - [x] **21. Phase 8: CLI diagnostics and run manifests.** Add a machine-readable run manifest per workflow execution (refresh/score/construct/rebalance/backtest/report) capturing input config, data snapshot IDs, warnings, and output artifacts for reproducible audit trails. Depends on steps 6, 11, and 17.
 
+- [x] **22. Phase 9: Backtest BDD scenarios.** Add `tests/bdd/features/backtest.feature` and `tests/bdd/test_backtest_bdd.py` with 5 scenarios: walk-forward positive return for uptrending universe, benchmark excess return computation, degraded-data warning when fundamentals missing, monthly vs quarterly rebalance frequency comparison, and period-aligned fundamentals snapshot selection. Uses `run_backtest()` with seeded storage. Depends on steps 10, 15, and 18.
+
+- [x] **23. Phase 9: Performance report BDD scenarios.** Add `tests/bdd/features/performance.feature` and `tests/bdd/test_performance_bdd.py` with 4 scenarios: positive Sharpe from uptrending NAV, benchmark-relative metrics present when benchmark available, relative metrics omitted without benchmark, and degraded assumptions surfaced from backtest metadata. Uses `compute_report_from_nav()` directly. Depends on steps 11 and 20.
+
+- [x] **24. Phase 9: Goal analytics BDD scenarios.** Add `tests/bdd/features/goal_analytics.feature` and `tests/bdd/test_goal_analytics_bdd.py` with 4 scenarios: higher target reduces success probability, compound-only profile has no SWR, shorter horizon widens sequence-of-returns risk band, and conservative profile produces lower SWR than aggressive. Uses `GoalAnalytics.compute()` directly. Depends on step 3b.
+
+- [x] **25. Phase 9: Factor attribution BDD scenarios.** Add `tests/bdd/features/attribution.feature` and `tests/bdd/test_attribution_bdd.py` with 3 scenarios: decomposition into three named factors, R-squared bounded [0,1], and factor contributions plus alpha approximate explained return. Uses `compute_factor_attribution()` with seeded backtest data. Depends on steps 10 and 11.
+
 ## Verification
 
 1. Verify the uv bootstrap by creating the environment, installing dependencies, and running the test and lint commands from a clean checkout.
@@ -101,6 +110,27 @@ The test suite is split into two layers for readability and intent clarity.
 1. Symbols without fundamentals are scored and flagged as degraded (zero fundamentals factor contributions).
 2. Fundamentals factors contribute to rank differences when price histories are identical.
 3. Partial fundamentals row (missing some fields) does not crash scoring and the symbol is still marked as having fundamentals.
+
+**Portfolio construction (4 scenarios):**
+
+1. Weights sum to 1.0 after construction.
+2. No single position exceeds the max weight constraint.
+3. Minimum holdings floor is respected.
+4. Higher-scoring symbol receives greater weight than lower-scoring symbol.
+
+**Rebalancing (3 scenarios):**
+
+1. First rebalance produces only buy orders.
+2. Rebalance after a weight shift produces buys and sells.
+3. Unchanged weight does not generate a trade.
+
+**Holdings state (5 scenarios):**
+
+1. Buying into an empty portfolio sets book cost to trade price.
+2. Adding to an existing position uses weighted-average book cost.
+3. Selling a position crystallises realized gain.
+4. Selling at a loss shows negative realized gain.
+5. Rebalance persists a holdings snapshot with unrealized gains.
 
 ### Test Commands
 
