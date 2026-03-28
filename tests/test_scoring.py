@@ -9,7 +9,7 @@ from alpha_holdings.data.storage import LocalStorageBackend
 from alpha_holdings.scoring import score_equities_from_snapshots
 from alpha_holdings.universe import build_liquid_universe_from_snapshots
 
-FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures"
+FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 
 
 def test_build_liquid_universe_filters_low_liquidity(tmp_path):
@@ -84,8 +84,10 @@ def test_build_liquid_universe_uses_seed_membership_and_currency_normalization(t
     assert universe.symbols == ["NOVN"]
     assert universe.members["security_id"].tolist() == ["CH0002005267"]
     assert universe.members["currency"].tolist() == ["CHF"]
+    assert universe.members["sector"].tolist() == ["Health Care"]
     assert round(float(universe.members.iloc[0]["avg_dollar_volume"]), 2) > 2_000_000
     assert set(universe.diagnostics["symbol"].tolist()) == {"NOVN", "SHOP"}
+    assert set(universe.diagnostics["sector"].dropna().tolist()) == {"Health Care", "Technology"}
     assert (
         universe.diagnostics.loc[
             universe.diagnostics["symbol"] == "SHOP", "passes_liquidity"

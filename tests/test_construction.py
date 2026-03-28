@@ -7,6 +7,7 @@ and output schema. Uses LocalStorageBackend with tmp_path fixtures.
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import pandas as pd
 import pytest
 
 from alpha_holdings.data.storage import LocalStorageBackend
@@ -70,6 +71,13 @@ def _seed_scores(backend, symbols, scores=None, countries=None):
         metadata={"requested_as_of": "2026-03-23"},
     )
     return rows
+
+
+def _write_seed_universe(tmp_path, rows):
+    """Write a temporary seed universe CSV and return its path."""
+    path = tmp_path / "seed_universe.csv"
+    pd.DataFrame(rows).to_csv(path, index=False)
+    return path
 
 
 def _seed_prior_weights(backend, weights_dict, portfolio_id="default"):
@@ -323,6 +331,95 @@ class TestTurnoverConstraint:
 
 
 # ---------------------------------------------------------------------------
+# Tests: sector deviation constraint
+# ---------------------------------------------------------------------------
+
+
+class TestSectorDeviationConstraint:
+    def test_sector_weight_respects_deviation_band(self, tmp_path):
+        backend = _make_backend(tmp_path)
+
+        _seed_scores(
+            backend,
+            ["TECH_A", "TECH_B", "HEALTH_A", "HEALTH_B"],
+            scores=[100.0, 90.0, 1.0, 1.0],
+            countries=["US", "US", "US", "US"],
+        )
+
+        seed_universe_path = _write_seed_universe(
+            tmp_path,
+            [
+                {
+                    "symbol": "TECH_A",
+                    "security_id": "TECH_A",
+                    "isin": "TECH_A",
+                    "name": "Tech A",
+                    "country": "US",
+                    "currency": "USD",
+                    "region": "US",
+                    "benchmark": "SPY",
+                    "sector": "Technology",
+                },
+                {
+                    "symbol": "TECH_B",
+                    "security_id": "TECH_B",
+                    "isin": "TECH_B",
+                    "name": "Tech B",
+                    "country": "US",
+                    "currency": "USD",
+                    "region": "US",
+                    "benchmark": "SPY",
+                    "sector": "Technology",
+                },
+                {
+                    "symbol": "HEALTH_A",
+                    "security_id": "HEALTH_A",
+                    "isin": "HEALTH_A",
+                    "name": "Health A",
+                    "country": "US",
+                    "currency": "USD",
+                    "region": "US",
+                    "benchmark": "SPY",
+                    "sector": "Health Care",
+                },
+                {
+                    "symbol": "HEALTH_B",
+                    "security_id": "HEALTH_B",
+                    "isin": "HEALTH_B",
+                    "name": "Health B",
+                    "country": "US",
+                    "currency": "USD",
+                    "region": "US",
+                    "benchmark": "SPY",
+                    "sector": "Health Care",
+                },
+            ],
+        )
+
+        constraints = PortfolioConstraints(
+            profile_id="test",
+            max_single_name_weight=Decimal("1.00"),
+            sector_deviation_band=Decimal("0.10"),
+            country_deviation_band=Decimal("0.50"),
+            max_annual_turnover=Decimal("1.00"),
+            min_holdings_count=1,
+        )
+
+        result = construct_portfolio(
+            storage=backend,
+            as_of="2026-03-23",
+            constraints=constraints,
+            seed_universe_path=seed_universe_path,
+        )
+
+        by_sector = result.weights.groupby("sector")["target_weight"].sum()
+
+        # Benchmark split is 50/50 in seed data, so with a 10% band
+        # Technology must not exceed 60%.
+        assert float(by_sector.get("Technology", 0.0)) <= 0.60 + 1e-6
+
+
+# ---------------------------------------------------------------------------
 # Tests: output schema
 # ---------------------------------------------------------------------------
 
@@ -334,7 +431,15 @@ class TestOutputSchema:
 
         result = construct_portfolio(storage=backend, as_of="2026-03-23", seed_universe_path=None)
 
-        required = {"portfolio_id", "symbol", "target_weight", "composite_score", "rank", "country"}
+        required = {
+            "portfolio_id",
+            "symbol",
+            "target_weight",
+            "composite_score",
+            "rank",
+            "country",
+            "sector",
+        }
         assert required.issubset(set(result.weights.columns))
 
     def test_snapshot_persisted(self, tmp_path):

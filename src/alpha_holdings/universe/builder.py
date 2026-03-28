@@ -80,6 +80,7 @@ def build_liquid_universe_from_snapshots(
                 "snapshot_as_of": str(snapshot["as_of"]),
                 "rows": len(frame),
                 "country": member.get("country"),
+                "sector": member.get("sector"),
                 "region": member.get("region"),
                 "currency": local_currency,
                 "base_currency": base_currency.upper(),
@@ -127,7 +128,16 @@ def _to_datetime(value: object) -> datetime:
 def _load_seed_universe(path: Path | None) -> pd.DataFrame:
     if path is None or not path.exists():
         return pd.DataFrame(
-            columns=["symbol", "security_id", "isin", "country", "currency", "region", "benchmark"]
+            columns=[
+                "symbol",
+                "security_id",
+                "isin",
+                "country",
+                "sector",
+                "currency",
+                "region",
+                "benchmark",
+            ]
         )
     frame = pd.read_csv(path)
     if "symbol" not in frame.columns:

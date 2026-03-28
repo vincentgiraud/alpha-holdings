@@ -16,12 +16,8 @@ Build a Python-first research platform managed with uv, starting from free daily
 - [x] Phase 3 (Universe and scoring): done
 - [x] Phase 4 (Construction/rebalance/backtest): done
 - [x] Phase 5 (Analytics workflows and full CLI surface): done
-- [ ] Phase 6 (Upgrade-path hardening and final docs): in progress
-
-Phase 6 progress notes (remove when phase completes):
-- Upgrade-path validation (`tests/test_upgrade_path.py`): 22 tests proving mock paid providers work end-to-end through refresh → score → construct. Tests cover multi-vendor refresh, scoring with paid fundamentals, construction constraints, normalization schema invariants, and provider-swap comparison showing rankings change when fundamentals factors are added.
-- Contract compliance tests in `tests/test_provider_contracts.py` validate structural identity, output schema, capability gating, free adapter capabilities, mock paid adapter contracts, composite multi-interface providers, and free-vs-paid schema parity.
-- README.md updated with complete architecture, all CLI commands, free-data limitations, and the exact upgrade-path process for adding a paid provider.
+- [x] Phase 6 (Upgrade-path hardening and final docs): done
+- [ ] Phase 7 (Data quality hardening and realism): planned
 
 ## Steps
 
@@ -57,6 +53,14 @@ Phase 6 progress notes (remove when phase completes):
 
 - [x] **13. Phase 6: Documentation.** Document the free-data limitations, upgrade seams, supported workflows, and the exact process for adding a paid provider implementation later. Depends on all prior steps.
 
+- [x] **14. Phase 7: Sector metadata completeness.** Add sector metadata coverage to the seed universe and normalized reference datasets so sector deviation constraints are enforced during construction and backtests rather than being deferred. Add explicit degraded-data signaling when sector labels are missing. Depends on steps 6, 7, and 9.
+
+- [ ] **15. Phase 7: Fundamentals-aware backtest inputs.** Extend refresh/normalization to persist point-in-time fundamental snapshots required for scoring in backtests, and wire the backtest runner to consume snapshot-aligned fundamentals instead of price-only fallback assumptions where available. Keep degraded-mode behavior explicit when snapshots are unavailable. Depends on steps 6, 8, and 10.
+
+- [ ] **16. Phase 7: Pydantic v2 cleanup.** Migrate remaining model `Config` usage to `ConfigDict` and remove deprecation warnings while preserving model behavior and existing public contracts. Depends on step 3.
+
+- [ ] **17. Phase 7: Validation and operator ergonomics.** Add targeted tests and CLI/report annotations for degraded assumptions (missing sector metadata, missing fundamentals snapshots) so users can distinguish hard constraints from degraded execution paths at run time. Depends on steps 14 and 15.
+
 ## Verification
 
 1. Verify the uv bootstrap by creating the environment, installing dependencies, and running the test and lint commands from a clean checkout.
@@ -78,14 +82,16 @@ The test suite is split into two layers for readability and intent clarity.
 ### Current Scenario Coverage (Implemented)
 
 **Asset allocation (3 scenarios):**
+
 1. Crypto remains excluded when `crypto_enabled=true` but `risk_appetite=3`.
 2. Crypto is included when `crypto_enabled=true` and `risk_appetite=4`.
 3. For otherwise identical profiles, shorter horizon (5y) results in higher bond target than longer horizon (20y).
 
 **Equity scoring (3 scenarios):**
-4. Symbols without fundamentals are scored and flagged as degraded (zero fundamentals factor contributions).
-5. Fundamentals factors contribute to rank differences when price histories are identical.
-6. Partial fundamentals row (missing some fields) does not crash scoring and the symbol is still marked as having fundamentals.
+
+1. Symbols without fundamentals are scored and flagged as degraded (zero fundamentals factor contributions).
+2. Fundamentals factors contribute to rank differences when price histories are identical.
+3. Partial fundamentals row (missing some fields) does not crash scoring and the symbol is still marked as having fundamentals.
 
 ### Test Commands
 

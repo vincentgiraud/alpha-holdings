@@ -5,11 +5,9 @@ produces a set of TargetWeight records. Enforces:
 
 1. Max position size (single-name cap)
 2. Minimum holdings count
+3. Sector deviation bands vs. benchmark proxy weights
 3. Country deviation bands vs. benchmark proxy weights
 4. Turnover cap vs. prior portfolio weights (when available)
-
-Sector deviation is structurally supported but deferred until sector
-metadata is available in the seed universe.
 """
 
 from __future__ import annotations
@@ -74,30 +72,45 @@ def construct_portfolio(
     if scores.empty:
         raise ValueError(f"No equity_scores snapshot found for as_of={as_of!r}")
 
-    # 2. Enrich country metadata: use scores column if present, fall back to seed CSV
+    # 2. Enrich country/sector metadata from scores and seed universe
     scores = scores.copy()
+    seed_universe = _load_seed_universe(seed_universe_path)
     if "country" not in scores.columns or scores["country"].isna().all():
-        country_map = _load_country_map(seed_universe_path)
+        country_map = _build_map(seed_universe, "country")
         scores["country"] = scores["symbol"].map(country_map).fillna("US")
     else:
         scores["country"] = scores["country"].fillna("US")
 
+    if "sector" not in scores.columns or scores["sector"].isna().all():
+        sector_map = _build_map(seed_universe, "sector")
+        scores["sector"] = scores["symbol"].map(sector_map).fillna("Unknown")
+    else:
+        scores["sector"] = scores["sector"].fillna("Unknown")
+
     # 3. Compute raw score-proportional weights
     weights = _score_proportional_weights(scores)
 
-    # 4. Apply country deviation bands
+    # 4. Apply sector deviation bands
+    weights = _apply_sector_deviation(
+        weights,
+        scores=scores,
+        seed_universe=seed_universe,
+        max_deviation=float(constraints.sector_deviation_band),
+    )
+
+    # 5. Apply country deviation bands
     weights = _apply_country_deviation(
         weights,
         max_deviation=float(constraints.country_deviation_band),
     )
 
-    # 5. Apply max position size cap (iterative redistribution)
+    # 6. Apply max position size cap (iterative redistribution)
     weights = _apply_position_cap(
         weights,
         max_weight=float(constraints.max_single_name_weight),
     )
 
-    # 6. Enforce minimum holdings floor
+    # 7. Enforce minimum holdings floor
     weights = _enforce_min_holdings(
         weights,
         scores=scores,
@@ -105,7 +118,7 @@ def construct_portfolio(
         max_weight=float(constraints.max_single_name_weight),
     )
 
-    # 7. Apply turnover constraint vs. prior weights
+    # 8. Apply turnover constraint vs. prior weights
     prior = _read_prior_weights(storage=storage, portfolio_id=portfolio_id, as_of=as_of)
     turnover = None
     if prior is not None:
@@ -115,19 +128,19 @@ def construct_portfolio(
             max_annual_turnover=float(constraints.max_annual_turnover),
         )
 
-    # 8. Final renormalization and re-cap (min_holdings/turnover may have shifted weights)
+    # 9. Final renormalization and re-cap (min_holdings/turnover may have shifted weights)
     weights = _renormalize(weights)
     weights = _apply_position_cap(weights, max_weight=float(constraints.max_single_name_weight))
     weights = _renormalize(weights)
 
-    # 9. Build output DataFrame
+    # 10. Build output DataFrame
     result_df = _build_result_dataframe(
         weights=weights,
         scores=scores,
         portfolio_id=portfolio_id,
     )
 
-    # 10. Persist as snapshot
+    # 11. Persist as snapshot
     run_as_of = datetime.now(tz=UTC)
     snapshot_path = storage.write_normalized_snapshot(
         dataset="portfolio_weights",
@@ -145,6 +158,7 @@ def construct_portfolio(
             "constraints": {
                 "max_single_name_weight": str(constraints.max_single_name_weight),
                 "min_holdings_count": constraints.min_holdings_count,
+                "sector_deviation_band": str(constraints.sector_deviation_band),
                 "country_deviation_band": str(constraints.country_deviation_band),
                 "max_annual_turnover": str(constraints.max_annual_turnover),
             },
@@ -192,17 +206,30 @@ def _default_constraints() -> PortfolioConstraints:
     return ProfileToConstraints.resolve(profile)
 
 
-def _load_country_map(seed_path: Path | None) -> dict[str, str]:
-    """Load symbol -> country mapping from seed universe CSV."""
+def _load_seed_universe(seed_path: Path | None) -> pd.DataFrame:
+    """Load and normalize seed universe data for metadata lookups."""
     if seed_path is None:
         from alpha_holdings.universe.builder import DEFAULT_SEED_UNIVERSE_PATH
 
         seed_path = DEFAULT_SEED_UNIVERSE_PATH
+
     try:
         seed = pd.read_csv(seed_path)
-        return dict(zip(seed["symbol"], seed["country"], strict=False))
+        if "symbol" not in seed.columns:
+            return pd.DataFrame()
+        seed = seed.copy()
+        seed["symbol"] = seed["symbol"].astype(str).str.upper().str.strip()
+        return seed
     except (FileNotFoundError, KeyError):
+        return pd.DataFrame()
+
+
+def _build_map(seed_universe: pd.DataFrame, column: str) -> dict[str, str]:
+    """Build a symbol -> metadata map from seed universe rows."""
+    if seed_universe.empty or column not in seed_universe.columns:
         return {}
+    mapped = seed_universe[["symbol", column]].dropna()
+    return dict(zip(mapped["symbol"], mapped[column], strict=False))
 
 
 def _score_proportional_weights(
@@ -280,6 +307,207 @@ def _apply_country_deviation(
         return weights
 
     return weights  # Country deviation will be enforced once benchmark proxy weights are available
+
+
+def _apply_sector_deviation(
+    weights: dict[str, float],
+    *,
+    scores: pd.DataFrame,
+    seed_universe: pd.DataFrame,
+    max_deviation: float,
+) -> dict[str, float]:
+    """Constrain sector weights to benchmark +/- max_deviation bands.
+
+    The benchmark proxy is inferred from seed universe rows matching the
+    current symbols, then expanded to all members of the dominant benchmark.
+    """
+    if not weights or max_deviation >= 0.50 or "sector" not in scores.columns:
+        return weights
+
+    symbol_to_sector = (
+        scores[["symbol", "sector"]]
+        .dropna(subset=["symbol"])
+        .assign(sector=lambda df: df["sector"].fillna("Unknown").astype(str))
+        .set_index("symbol")["sector"]
+        .to_dict()
+    )
+    if not symbol_to_sector:
+        return weights
+
+    benchmark_sector_weights = _infer_benchmark_sector_weights(
+        symbols=set(weights.keys()),
+        seed_universe=seed_universe,
+    )
+    if not benchmark_sector_weights:
+        return weights
+
+    return _enforce_group_deviation_band(
+        weights=weights,
+        group_by_symbol=symbol_to_sector,
+        benchmark_group_weights=benchmark_sector_weights,
+        max_deviation=max_deviation,
+    )
+
+
+def _infer_benchmark_sector_weights(
+    *,
+    symbols: set[str],
+    seed_universe: pd.DataFrame,
+) -> dict[str, float]:
+    """Infer benchmark sector weights from seed universe benchmark membership."""
+    if seed_universe.empty or "sector" not in seed_universe.columns:
+        return {}
+    if "benchmark" not in seed_universe.columns:
+        return {}
+
+    frame = seed_universe.copy()
+    frame["symbol"] = frame["symbol"].astype(str).str.upper().str.strip()
+    frame["sector"] = frame["sector"].fillna("Unknown").astype(str)
+
+    matching = frame[frame["symbol"].isin(symbols)]
+    if matching.empty:
+        return {}
+
+    benchmark_series = matching["benchmark"].dropna().astype(str)
+    if benchmark_series.empty:
+        return {}
+
+    dominant_benchmark = benchmark_series.mode().iloc[0]
+    benchmark_members = frame[frame["benchmark"].astype(str) == dominant_benchmark]
+    if benchmark_members.empty:
+        return {}
+
+    counts = benchmark_members["sector"].value_counts(normalize=True)
+    return {str(sector): float(weight) for sector, weight in counts.items()}
+
+
+def _enforce_group_deviation_band(
+    *,
+    weights: dict[str, float],
+    group_by_symbol: dict[str, str],
+    benchmark_group_weights: dict[str, float],
+    max_deviation: float,
+) -> dict[str, float]:
+    """Project group totals to benchmark-relative deviation bands."""
+    result = dict(weights)
+    if not result:
+        return result
+
+    def group_totals(current: dict[str, float]) -> dict[str, float]:
+        totals: dict[str, float] = {}
+        for symbol, weight in current.items():
+            group = group_by_symbol.get(symbol, "Unknown")
+            totals[group] = totals.get(group, 0.0) + weight
+        return totals
+
+    def symbol_lists(current: dict[str, float]) -> dict[str, list[str]]:
+        lists: dict[str, list[str]] = {}
+        for symbol in current:
+            group = group_by_symbol.get(symbol, "Unknown")
+            lists.setdefault(group, []).append(symbol)
+        return lists
+
+    groups = set(benchmark_group_weights) | {group_by_symbol.get(s, "Unknown") for s in result}
+    lower = {g: max(0.0, benchmark_group_weights.get(g, 0.0) - max_deviation) for g in groups}
+    upper = {g: min(1.0, benchmark_group_weights.get(g, 0.0) + max_deviation) for g in groups}
+
+    for _ in range(10):
+        totals = group_totals(result)
+        grouped_symbols = symbol_lists(result)
+
+        # Step 1: clip groups above upper bound and collect excess.
+        excess = 0.0
+        for group, total in totals.items():
+            max_total = upper.get(group, 1.0)
+            if total <= max_total + 1e-10:
+                continue
+            keep = max_total
+            scale = keep / total if total > 0 else 1.0
+            for symbol in grouped_symbols.get(group, []):
+                old = result[symbol]
+                result[symbol] = old * scale
+            excess += total - keep
+
+        if excess > 1e-10:
+            totals = group_totals(result)
+            grouped_symbols = symbol_lists(result)
+            capacities = {
+                group: max(0.0, upper.get(group, 1.0) - total) for group, total in totals.items()
+            }
+            total_capacity = sum(capacities.values())
+            if total_capacity > 1e-12:
+                for group, capacity in capacities.items():
+                    if capacity <= 0:
+                        continue
+                    add_group = excess * (capacity / total_capacity)
+                    symbols = grouped_symbols.get(group, [])
+                    group_weight = sum(result[s] for s in symbols)
+                    if group_weight > 1e-12:
+                        for symbol in symbols:
+                            result[symbol] += add_group * (result[symbol] / group_weight)
+                    elif symbols:
+                        add_each = add_group / len(symbols)
+                        for symbol in symbols:
+                            result[symbol] += add_each
+
+        # Step 2: attempt to raise groups below lower bound by drawing from groups
+        # that still sit above their lower bounds.
+        totals = group_totals(result)
+        grouped_symbols = symbol_lists(result)
+        deficits = {
+            group: max(0.0, lower.get(group, 0.0) - total) for group, total in totals.items()
+        }
+        total_deficit = sum(deficits.values())
+        if total_deficit > 1e-10:
+            donors = {group: max(0.0, totals[group] - lower.get(group, 0.0)) for group in totals}
+            total_donor = sum(donors.values())
+            if total_donor > 1e-12:
+                draw = min(total_deficit, total_donor)
+                for group, donor_capacity in donors.items():
+                    if donor_capacity <= 0:
+                        continue
+                    remove_group = draw * (donor_capacity / total_donor)
+                    symbols = grouped_symbols.get(group, [])
+                    group_weight = sum(result[s] for s in symbols)
+                    if group_weight <= 1e-12:
+                        continue
+                    for symbol in symbols:
+                        result[symbol] -= remove_group * (result[symbol] / group_weight)
+
+                totals_after = group_totals(result)
+                grouped_after = symbol_lists(result)
+                deficits_after = {
+                    group: max(0.0, lower.get(group, 0.0) - total)
+                    for group, total in totals_after.items()
+                }
+                total_deficit_after = sum(deficits_after.values())
+                if total_deficit_after > 1e-12:
+                    for group, deficit in deficits_after.items():
+                        if deficit <= 0:
+                            continue
+                        symbols = grouped_after.get(group, [])
+                        if not symbols:
+                            continue
+                        group_weight = sum(result[s] for s in symbols)
+                        if group_weight > 1e-12:
+                            for symbol in symbols:
+                                result[symbol] += deficit * (result[symbol] / group_weight)
+                        else:
+                            add_each = deficit / len(symbols)
+                            for symbol in symbols:
+                                result[symbol] += add_each
+
+        result = _renormalize({s: max(0.0, w) for s, w in result.items()})
+
+        # Stop if all group totals are inside bounds.
+        totals = group_totals(result)
+        if all(
+            lower.get(group, 0.0) - 1e-6 <= total <= upper.get(group, 1.0) + 1e-6
+            for group, total in totals.items()
+        ):
+            break
+
+    return result
 
 
 def _enforce_min_holdings(
@@ -395,6 +623,7 @@ def _build_result_dataframe(
         score_row = scores_by_sym.loc[symbol] if symbol in scores_by_sym.index else None
         composite = float(score_row["composite_score"]) if score_row is not None else 0.0
         country = str(score_row.get("country", "US")) if score_row is not None else "US"
+        sector = str(score_row.get("sector", "Unknown")) if score_row is not None else "Unknown"
         rank = int(score_row["rank"]) if score_row is not None and "rank" in score_row.index else 0
 
         rows.append(
@@ -405,6 +634,7 @@ def _build_result_dataframe(
                 "composite_score": round(composite, 4),
                 "rank": rank,
                 "country": country,
+                "sector": sector,
             }
         )
 

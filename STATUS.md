@@ -8,20 +8,27 @@
 - It should summarize deltas from the roadmap in `PLAN.md`, not restate the full plan.
 
 ## Now
-- Phases 1–5 complete. Phase 6 nearing completion.
-- Contract compliance and upgrade-path validation tests added (`tests/test_upgrade_path.py`, 22 tests).
-- README.md fully rewritten with complete architecture, CLI commands, free-data limitations, and upgrade-path instructions.
-- 290 tests pass. Lint and format clean.
+
+- Phases 1–6 complete.
+- Phase 7 scope and priorities defined in PLAN.md.
+- Phase 7 sector metadata completeness delivered: seed universe now includes sector coverage, universe diagnostics carry sector metadata, and construction enforces sector deviation bands.
+- Release 0.1.0 finalized and changelog created.
+- Full verification pass complete: 291 tests pass; lint and format checks clean.
 
 ## Upcoming Work
 
-### Phase 6
-- [ ] Release 0.1.0 checklist (version bump, changelog, final pass)
+### Post-0.1.0
+
+- [ ] Persist and consume point-in-time fundamentals snapshots in backtest scoring path.
+- [ ] Migrate remaining Pydantic `Config` usage to `ConfigDict`.
+- [ ] Add tests and report/CLI annotations for degraded execution paths.
 
 ## Blocked
+
 - No hard blockers currently.
 
 ## Known Limitations
+
 - EDGAR fundamentals coverage is US-centric, so mixed universes still rely on graceful degradation for ex-US symbols without fundamentals snapshots.
 - Backtest uses in-memory scoring without fundamentals factors (free-source data degradation). Financial snapshots added in future enhancement.
 - Sector deviation enforcement deferred until sector metadata is added to seed universe.
@@ -30,6 +37,7 @@
 - Optional cleanup pending: migrate Pydantic `Config` usage to `ConfigDict` to remove deprecation warnings.
 
 ## Test Commands
+
 - All tests: `uv run pytest -q`
 - Unit/function tests: `uv run pytest tests/test_models.py tests/test_profiles.py tests/test_analytics.py -q`
 - BDD scenarios: `uv run pytest tests/bdd -q`
