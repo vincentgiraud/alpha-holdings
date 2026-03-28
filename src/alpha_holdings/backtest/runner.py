@@ -149,6 +149,12 @@ def run_backtest(
         storage=storage,
         symbols=symbols,
     )
+    missing_fundamentals = len(set(symbols) - set(fundamentals_by_symbol))
+    if missing_fundamentals > 0:
+        warnings.append(
+            "Degraded execution: fundamentals snapshots unavailable for "
+            f"{missing_fundamentals} symbol(s); price-only factors were used for those names."
+        )
 
     # 4. Walk-forward simulation
     nav = initial_value
@@ -273,6 +279,7 @@ def run_backtest(
             "volatility": round(volatility, 6),
             "sharpe_ratio": round(sharpe, 4),
             "max_drawdown": round(max_dd, 6),
+            "warnings": warnings,
         },
     )
 

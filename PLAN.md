@@ -17,7 +17,7 @@ Build a Python-first research platform managed with uv, starting from free daily
 - [x] Phase 4 (Construction/rebalance/backtest): done
 - [x] Phase 5 (Analytics workflows and full CLI surface): done
 - [x] Phase 6 (Upgrade-path hardening and final docs): done
-- [ ] Phase 7 (Data quality hardening and realism): planned
+- [x] Phase 7 (Data quality hardening and realism): done
 
 ## Steps
 
@@ -55,11 +55,11 @@ Build a Python-first research platform managed with uv, starting from free daily
 
 - [x] **14. Phase 7: Sector metadata completeness.** Add sector metadata coverage to the seed universe and normalized reference datasets so sector deviation constraints are enforced during construction and backtests rather than being deferred. Add explicit degraded-data signaling when sector labels are missing. Depends on steps 6, 7, and 9.
 
-- [ ] **15. Phase 7: Fundamentals-aware backtest inputs.** Extend refresh/normalization to persist point-in-time fundamental snapshots required for scoring in backtests, and wire the backtest runner to consume snapshot-aligned fundamentals instead of price-only fallback assumptions where available. Keep degraded-mode behavior explicit when snapshots are unavailable. Depends on steps 6, 8, and 10.
+- [x] **15. Phase 7: Fundamentals-aware backtest inputs.** Extend refresh/normalization to persist point-in-time fundamental snapshots required for scoring in backtests, and wire the backtest runner to consume snapshot-aligned fundamentals instead of price-only fallback assumptions where available. Keep degraded-mode behavior explicit when snapshots are unavailable. Depends on steps 6, 8, and 10.
 
-- [ ] **16. Phase 7: Pydantic v2 cleanup.** Migrate remaining model `Config` usage to `ConfigDict` and remove deprecation warnings while preserving model behavior and existing public contracts. Depends on step 3.
+- [x] **16. Phase 7: Pydantic v2 cleanup.** Migrate remaining model `Config` usage to `ConfigDict` and remove deprecation warnings while preserving model behavior and existing public contracts. Depends on step 3.
 
-- [ ] **17. Phase 7: Validation and operator ergonomics.** Add targeted tests and CLI/report annotations for degraded assumptions (missing sector metadata, missing fundamentals snapshots) so users can distinguish hard constraints from degraded execution paths at run time. Depends on steps 14 and 15.
+- [x] **17. Phase 7: Validation and operator ergonomics.** Add targeted tests and CLI/report annotations for degraded assumptions (missing sector metadata, missing fundamentals snapshots) so users can distinguish hard constraints from degraded execution paths at run time. Depends on steps 14 and 15.
 
 ## Verification
 

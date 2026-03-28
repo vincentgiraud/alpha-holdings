@@ -227,6 +227,10 @@ def construct(date: str = typer.Option(..., help="Construction date (YYYY-MM-DD)
     if result.turnover_vs_prior is not None:
         typer.echo(f"  Turnover:     {result.turnover_vs_prior:.2%}")
     typer.echo(f"  Snapshot:     {result.snapshot_path}")
+    if result.warnings:
+        typer.echo("")
+        for w in result.warnings:
+            typer.secho(f"  ⚠ {w}", fg=typer.colors.YELLOW)
     typer.echo("")
     typer.echo(
         result.weights[["symbol", "target_weight", "composite_score", "rank", "country"]].to_string(
@@ -373,6 +377,10 @@ def report(
     typer.echo(f"  Snapshot:  {rpt.snapshot_path}")
     typer.echo("")
     typer.echo(rpt.summary.to_string(index=False))
+    if rpt.degraded_assumptions:
+        typer.echo("")
+        for warning in rpt.degraded_assumptions:
+            typer.secho(f"  ⚠ {warning}", fg=typer.colors.YELLOW)
 
     # Factor attribution
     attribution = None

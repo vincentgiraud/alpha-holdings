@@ -37,6 +37,7 @@ class ConstructionResult:
     max_weight: Decimal
     country_groups: dict[str, float]
     turnover_vs_prior: float | None
+    warnings: list[str]
     snapshot_path: Path
     weights: pd.DataFrame
 
@@ -64,6 +65,8 @@ def construct_portfolio(
     if constraints is None:
         constraints = _default_constraints()
 
+    warnings: list[str] = []
+
     # 1. Read scored equities
     try:
         scores = storage.read_snapshot(dataset="equity_scores", as_of=as_of)
@@ -89,6 +92,15 @@ def construct_portfolio(
 
     # 3. Compute raw score-proportional weights
     weights = _score_proportional_weights(scores)
+
+    warnings.extend(
+        _collect_construction_warnings(
+            scores=scores,
+            seed_universe=seed_universe,
+            symbols=set(weights.keys()),
+            sector_deviation_band=float(constraints.sector_deviation_band),
+        )
+    )
 
     # 4. Apply sector deviation bands
     weights = _apply_sector_deviation(
@@ -155,6 +167,7 @@ def construct_portfolio(
         metadata={
             "portfolio_id": portfolio_id,
             "requested_as_of": as_of,
+            "warnings": warnings,
             "constraints": {
                 "max_single_name_weight": str(constraints.max_single_name_weight),
                 "min_holdings_count": constraints.min_holdings_count,
@@ -178,6 +191,7 @@ def construct_portfolio(
         max_weight=Decimal(str(round(float(result_df["target_weight"].max()), 6))),
         country_groups=country_groups,
         turnover_vs_prior=turnover,
+        warnings=warnings,
         snapshot_path=snapshot_path,
         weights=result_df,
     )
@@ -230,6 +244,46 @@ def _build_map(seed_universe: pd.DataFrame, column: str) -> dict[str, str]:
         return {}
     mapped = seed_universe[["symbol", column]].dropna()
     return dict(zip(mapped["symbol"], mapped[column], strict=False))
+
+
+def _collect_construction_warnings(
+    *,
+    scores: pd.DataFrame,
+    seed_universe: pd.DataFrame,
+    symbols: set[str],
+    sector_deviation_band: float,
+) -> list[str]:
+    """Build user-facing degraded-mode warnings for construction output."""
+    warnings: list[str] = []
+
+    if "sector" in scores.columns:
+        unknown_mask = scores["sector"].astype(str).str.strip().eq("Unknown")
+        missing_count = int(unknown_mask.sum())
+        if missing_count > 0:
+            warnings.append(
+                "Degraded execution: missing sector metadata for "
+                f"{missing_count} symbol(s); sector deviation checks may be approximate."
+            )
+
+    if sector_deviation_band < 0.50:
+        benchmark_sector_weights = _infer_benchmark_sector_weights(
+            symbols=symbols,
+            seed_universe=seed_universe,
+        )
+        if not benchmark_sector_weights:
+            warnings.append(
+                "Degraded execution: benchmark sector reference unavailable; "
+                "sector deviation constraint fallback was used."
+            )
+
+    # Deduplicate while preserving order
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for warning in warnings:
+        if warning not in seen:
+            deduped.append(warning)
+            seen.add(warning)
+    return deduped
 
 
 def _score_proportional_weights(

@@ -418,6 +418,42 @@ class TestSectorDeviationConstraint:
         # Technology must not exceed 60%.
         assert float(by_sector.get("Technology", 0.0)) <= 0.60 + 1e-6
 
+    def test_warns_when_sector_metadata_missing(self, tmp_path):
+        backend = _make_backend(tmp_path)
+
+        _seed_scores(
+            backend,
+            ["AAPL", "MSFT", "GOOGL"],
+            scores=[10.0, 9.0, 8.0],
+            countries=["US", "US", "US"],
+        )
+
+        # No sector column in this seed file for AAPL/GOOGL. MSFT has one.
+        seed_universe_path = _write_seed_universe(
+            tmp_path,
+            [
+                {
+                    "symbol": "MSFT",
+                    "security_id": "MSFT",
+                    "isin": "MSFT",
+                    "name": "Microsoft",
+                    "country": "US",
+                    "currency": "USD",
+                    "region": "US",
+                    "benchmark": "SPY",
+                    "sector": "Technology",
+                }
+            ],
+        )
+
+        result = construct_portfolio(
+            storage=backend,
+            as_of="2026-03-23",
+            seed_universe_path=seed_universe_path,
+        )
+
+        assert any("missing sector metadata" in w.lower() for w in result.warnings)
+
 
 # ---------------------------------------------------------------------------
 # Tests: output schema

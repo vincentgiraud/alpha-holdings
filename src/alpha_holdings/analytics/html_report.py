@@ -42,6 +42,7 @@ def render_html_report(
     drawdown_chart = _render_drawdown_chart(nav_series)
     attribution_section = _render_attribution_section(attribution) if attribution else ""
     weight_section = _render_weight_section(weight_history) if weight_history is not None else ""
+    assumptions_section = _render_assumptions_section(report.degraded_assumptions)
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -62,6 +63,8 @@ def render_html_report(
 <h2>Summary Metrics</h2>
 {_render_metrics_table(report)}
 </section>
+
+{assumptions_section}
 
 <section class="chart-section">
 <h2>Portfolio NAV</h2>
@@ -136,6 +139,18 @@ def _render_metrics_table(report: PerformanceReport) -> str:
                 pass
         tbody += f"<tr><td>{metric}</td><td{css_class}>{value}</td></tr>\n"
     return f"<table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody>{tbody}</tbody></table>"
+
+
+def _render_assumptions_section(assumptions: list[str]) -> str:
+    """Render degraded-execution assumptions as a dedicated section."""
+    if not assumptions:
+        return ""
+
+    items = "".join(f"<li>{_html_escape(item)}</li>" for item in assumptions)
+    return f"""<section class=\"chart-section\">
+<h2>Data Quality Assumptions</h2>
+<ul>{items}</ul>
+</section>"""
 
 
 def _render_nav_chart(nav_series: pd.DataFrame) -> str:

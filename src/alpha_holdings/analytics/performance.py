@@ -7,7 +7,7 @@ that can be displayed or persisted.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -39,6 +39,7 @@ class PerformanceReport:
     positive_days_pct: float
     snapshot_path: Path
     summary: pd.DataFrame
+    degraded_assumptions: list[str] = field(default_factory=list)
 
 
 def generate_report(
@@ -62,9 +63,12 @@ def generate_report(
         PerformanceReport with all computed metrics.
     """
     # Read the latest backtest_results snapshot
-    nav_df = _read_latest_backtest(storage=storage)
+    nav_df, backtest_metadata = _read_latest_backtest_with_metadata(storage=storage)
     if nav_df is None:
         raise ValueError("No backtest_results snapshot found. Run 'alpha backtest' first.")
+
+    raw_warnings = backtest_metadata.get("warnings", [])
+    degraded_assumptions = [str(w) for w in raw_warnings] if isinstance(raw_warnings, list) else []
 
     return compute_report_from_nav(
         nav_series=nav_df,
@@ -72,6 +76,7 @@ def generate_report(
         portfolio_id=portfolio_id,
         risk_free_rate=risk_free_rate,
         benchmark_symbol=benchmark_symbol,
+        degraded_assumptions=degraded_assumptions,
     )
 
 
@@ -82,6 +87,7 @@ def compute_report_from_nav(
     portfolio_id: str = "default",
     risk_free_rate: float = 0.04,
     benchmark_symbol: str = "SPY",
+    degraded_assumptions: list[str] | None = None,
 ) -> PerformanceReport:
     """Compute performance report from a NAV DataFrame.
 
@@ -187,6 +193,10 @@ def compute_report_from_nav(
             "metric": "Information Ratio",
             "value": f"{information_ratio:.4f}" if information_ratio is not None else "N/A",
         },
+        {
+            "metric": "Data Quality Assumptions",
+            "value": " | ".join(degraded_assumptions) if degraded_assumptions else "None",
+        },
     ]
     summary_df = pd.DataFrame(summary_rows)
 
@@ -210,6 +220,7 @@ def compute_report_from_nav(
             "total_return": round(total_return, 6),
             "sharpe_ratio": round(sharpe, 4),
             "max_drawdown": round(max_dd, 6),
+            "degraded_assumptions": degraded_assumptions or [],
         },
     )
 
@@ -232,6 +243,7 @@ def compute_report_from_nav(
         positive_days_pct=round(positive_pct, 1),
         snapshot_path=snapshot_path,
         summary=summary_df,
+        degraded_assumptions=list(degraded_assumptions or []),
     )
 
 
@@ -242,15 +254,26 @@ def compute_report_from_nav(
 
 def _read_latest_backtest(*, storage: StorageBackend) -> pd.DataFrame | None:
     """Read the latest backtest_results snapshot."""
+    nav_df, _ = _read_latest_backtest_with_metadata(storage=storage)
+    return nav_df
+
+
+def _read_latest_backtest_with_metadata(
+    *,
+    storage: StorageBackend,
+) -> tuple[pd.DataFrame | None, dict[str, object]]:
+    """Read latest backtest NAV rows plus snapshot metadata."""
     snapshots = storage.list_snapshots(dataset_filter="backtest_results")
     if not snapshots:
-        return None
+        return None, {}
     latest = max(snapshots, key=lambda s: str(s["as_of"]))
     as_of_prefix = str(latest["as_of"])[:10]
     try:
-        return storage.read_snapshot(dataset="backtest_results", as_of=as_of_prefix)
+        return storage.read_snapshot(dataset="backtest_results", as_of=as_of_prefix), dict(
+            latest.get("metadata", {})
+        )
     except FileNotFoundError:
-        return None
+        return None, dict(latest.get("metadata", {}))
 
 
 def _compute_max_drawdown(nav_array: np.ndarray) -> float:

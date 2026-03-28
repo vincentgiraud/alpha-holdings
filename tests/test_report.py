@@ -341,6 +341,35 @@ class TestGenerateReport:
         assert isinstance(report, PerformanceReport)
         assert report.total_return != 0.0 or report.volatility >= 0.0
 
+    def test_propagates_degraded_assumptions_from_backtest_metadata(self, tmp_path):
+        backend = _make_backend(tmp_path)
+        nav_df = _make_nav_series(n_days=30)
+        as_of = datetime.now(tz=UTC)
+        rows = nav_df.to_dict(orient="records")
+        path = backend.write_normalized_snapshot(
+            dataset="backtest_results",
+            as_of=as_of,
+            rows=rows,
+        )
+        warnings = [
+            "Degraded execution: missing sector metadata for 2 symbols.",
+            "Degraded execution: fundamentals snapshots unavailable for 1 symbol.",
+        ]
+        backend.register_snapshot(
+            dataset="backtest_results",
+            as_of=as_of,
+            snapshot_path=path,
+            row_count=len(rows),
+            metadata={"portfolio_id": "test", "warnings": warnings},
+        )
+
+        report = generate_report(storage=backend)
+
+        assert report.degraded_assumptions == warnings
+        note = report.summary[report.summary["metric"] == "Data Quality Assumptions"]
+        assert not note.empty
+        assert "missing sector metadata" in str(note.iloc[0]["value"]).lower()
+
 
 # ---------------------------------------------------------------------------
 # Tests: Edge cases
