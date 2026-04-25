@@ -317,6 +317,90 @@ def opportunities() -> None:
 
 
 @cli.command()
+@click.option("--from", "from_date", default=None, help="Start date YYYYMMDD (default: earliest allocation).")
+@click.option("--to", "to_date", default=None, help="End date YYYYMMDD (default: today).")
+@click.option("--benchmark", default="SPY", help="Benchmark ticker (default: SPY).")
+def backtest(from_date: str | None, to_date: str | None, benchmark: str) -> None:
+    """Compare historical theme allocations vs benchmark."""
+    from alpha_holdings.backtest import list_snapshots, load_allocation, compute_returns
+
+    snapshots = list_snapshots()
+    if not snapshots:
+        console.print("[yellow]No saved allocations found. Run 'discover' first.[/yellow]")
+        return
+
+    if not from_date:
+        from_date = snapshots[0]
+        console.print(f"Using earliest allocation: {from_date}")
+
+    alloc = load_allocation(from_date)
+    if not alloc:
+        console.print(f"[red]No allocation found for {from_date}. Available: {', '.join(snapshots)}[/red]")
+        return
+
+    console.rule(f"[bold]Backtest: {from_date} → {to_date or 'today'}[/bold]")
+    console.print(f"Benchmark: {benchmark}")
+    console.print()
+
+    results = compute_returns(alloc, from_date, to_date, benchmark)
+
+    # Per-ticker table
+    table = Table(title="Per-Ticker Returns", show_lines=True)
+    table.add_column("Ticker", style="bold")
+    table.add_column("Theme", max_width=30)
+    table.add_column("Weight %", justify="right")
+    table.add_column("Entry", justify="right")
+    table.add_column("Current", justify="right")
+    table.add_column("Return %", justify="right")
+
+    for tr in sorted(results["ticker_returns"], key=lambda x: x.get("return_pct") or 0, reverse=True):
+        ret = tr["return_pct"]
+        ret_str = f"[green]+{ret:.1f}%[/green]" if ret and ret >= 0 else f"[red]{ret:.1f}%[/red]" if ret else "N/A"
+        ep_str = f"${tr['entry_price']:.2f}" if tr["entry_price"] else "N/A"
+        cp_str = f"${tr['current_price']:.2f}" if tr["current_price"] else "N/A"
+        table.add_row(
+            tr["ticker"],
+            tr["theme"][:30],
+            f"{tr['weight_pct']:.1f}%",
+            ep_str,
+            cp_str,
+            ret_str,
+        )
+    console.print(table)
+
+    # Summary
+    console.print()
+    summary = Table(title="Portfolio Summary", show_lines=True)
+    summary.add_column("Metric", style="bold")
+    summary.add_column("Value", justify="right")
+
+    tr_str = f"{results['thematic_return']:+.2f}%" if results["thematic_return"] else "N/A"
+    cr_str = f"{results['core_return']:+.2f}%" if results["core_return"] is not None else "N/A"
+    bl_str = f"{results['blended_return']:+.2f}%" if results["blended_return"] else "N/A"
+    bm_str = f"{results['benchmark_return']:+.2f}%" if results["benchmark_return"] is not None else "N/A"
+    alpha = results.get("alpha")
+    alpha_str = f"[green]+{alpha:.2f}%[/green]" if alpha and alpha > 0 else f"[red]{alpha:.2f}%[/red]" if alpha else "N/A"
+    dd_str = f"{results['max_drawdown']:.1f}%"
+
+    summary.add_row("Thematic return (weighted)", tr_str)
+    summary.add_row("Core return (benchmark proxy)", cr_str)
+    summary.add_row("Blended portfolio return", bl_str)
+    summary.add_row(f"Benchmark ({benchmark})", bm_str)
+    summary.add_row("Alpha (blended - benchmark)", alpha_str)
+    summary.add_row("Max single-ticker drawdown", dd_str)
+    console.print(summary)
+
+    console.print()
+    console.print(
+        "[dim italic]This backtest uses the tool's historical recommendations. "
+        "Past performance does not predict future results. "
+        "Only works from when themes were first saved — cannot simulate past runs retroactively.[/dim italic]"
+    )
+    console.print()
+    console.print(DISCLAIMER)
+
+
+@cli.command()
 @click.argument("what", type=click.Choice(["themes", "allocation"]))
 def show(what: str) -> None:
     """Display saved themes or allocation data."""

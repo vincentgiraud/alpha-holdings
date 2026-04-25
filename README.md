@@ -107,6 +107,23 @@ Quick scan across all funded themes for buy-the-dip opportunities.
 alpha-holdings opportunities
 ```
 
+### `alpha-holdings backtest`
+
+Compare historical theme allocations vs a benchmark (default: SPY). Computes per-ticker returns, weighted portfolio return, and alpha.
+
+```bash
+alpha-holdings backtest                          # From earliest allocation to today
+alpha-holdings backtest --from 20260425          # From a specific date
+alpha-holdings backtest --from 20260425 --to 20260525 --benchmark VT
+```
+
+**Options:**
+- `--from` — Start date YYYYMMDD (default: earliest saved allocation).
+- `--to` — End date YYYYMMDD (default: today).
+- `--benchmark` — Benchmark ticker to compare against (default: `SPY`).
+
+**Limitations:** Backtesting only works from when themes were first saved. Cannot simulate past runs retroactively. Past performance does not predict future results.
+
 ### `alpha-holdings show`
 
 Display saved data from previous runs.
