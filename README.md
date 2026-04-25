@@ -270,6 +270,11 @@ Companies must pass minimum thresholds before scoring:
 | Debt-to-equity | ≤300 | Rejects over-leveraged companies |
 | Operating margin | ≥-20% | Allows cyclical dips but filters deep losses |
 | Revenue history | Must exist | Filters out pre-revenue explorers/SPACs |
+| **2-year price return** | **≥-30%** | **Rejects persistent decliners — structural issues** |
+
+Additionally, two technical warning flags are shown (but don't reject):
+- **200-DMA position** — flagged if >20% below the 200-day moving average (stock in a downtrend)
+- **Earnings revision** — flagged if forward P/E > 1.3× trailing P/E (analysts cutting estimates)
 
 Companies that fail these filters are removed before scoring and logged in the output.
 

@@ -617,6 +617,12 @@ def _print_supply_chain_tree(theme, scores, fund_data, etf_rec, base_currency="U
                 entry_str = " 🔴 wait"
             tier_branch.add(f"[{style}]{c.full_ticker}[/{style}] {c.name} {ccy_str} {pe_str} {score_str}{entry_str}{access_tag}")
 
+            # Technical warning flags
+            if f:
+                from alpha_holdings.fundamentals import get_technical_flags
+                for flag in get_technical_flags(f):
+                    tier_branch.add(f"  [dim red]{flag}[/dim red]")
+
     if etf_rec and etf_rec.etf_ticker:
         tree.add(f"[blue]ETF: {etf_rec.etf_ticker} — {etf_rec.reasoning}[/blue]")
 

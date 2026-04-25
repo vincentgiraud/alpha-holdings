@@ -72,6 +72,13 @@ def _fetch_yfinance(ticker: str) -> Fundamentals:
     except Exception:
         pass
 
+    # Technical indicators
+    return_2yr = _compute_2yr_return(t)
+    pct_200dma = _compute_200dma_position(t, current)
+    trailing_pe = info.get("trailingPE")
+    fwd_pe = info.get("forwardPE")
+    pe_revision = round(fwd_pe / trailing_pe, 2) if fwd_pe and trailing_pe and trailing_pe > 0 else None
+
     return Fundamentals(
         ticker=ticker,
         name=info.get("shortName") or info.get("longName"),
@@ -82,8 +89,8 @@ def _fetch_yfinance(ticker: str) -> Fundamentals:
         operating_margin=_pct(info.get("operatingMargins")),
         free_cash_flow=info.get("freeCashflow"),
         fcf_yield=_compute_fcf_yield(info),
-        pe_ratio=info.get("trailingPE"),
-        forward_pe=info.get("forwardPE"),
+        pe_ratio=trailing_pe,
+        forward_pe=fwd_pe,
         peg_ratio=info.get("pegRatio"),
         debt_to_equity=info.get("debtToEquity"),
         roe=_pct(info.get("returnOnEquity")),
@@ -94,7 +101,39 @@ def _fetch_yfinance(ticker: str) -> Fundamentals:
         drawdown_from_peak=drawdown,
         ev_to_ebitda=info.get("enterpriseToEbitda"),
         avg_daily_volume=info.get("averageDailyVolume10Day"),
+        return_2yr=return_2yr,
+        pct_from_200dma=pct_200dma,
+        pe_revision_ratio=pe_revision,
     )
+
+
+def _compute_2yr_return(ticker_obj) -> Optional[float]:
+    """Compute 2-year price return %."""
+    try:
+        hist = ticker_obj.history(period="2y")
+        if hist is not None and len(hist) >= 20:
+            start = hist["Close"].iloc[0]
+            end = hist["Close"].iloc[-1]
+            if start and start > 0:
+                return round((end / start - 1) * 100, 2)
+    except Exception:
+        pass
+    return None
+
+
+def _compute_200dma_position(ticker_obj, current_price: Optional[float]) -> Optional[float]:
+    """Compute % distance from 200-day moving average."""
+    if not current_price:
+        return None
+    try:
+        hist = ticker_obj.history(period="1y")
+        if hist is not None and len(hist) >= 200:
+            ma_200 = hist["Close"].rolling(200).mean().iloc[-1]
+            if ma_200 and ma_200 > 0:
+                return round((current_price / ma_200 - 1) * 100, 2)
+    except Exception:
+        pass
+    return None
 
 
 def _pct(val) -> Optional[float]:
@@ -148,7 +187,26 @@ def passes_quality_filter(f: Fundamentals) -> tuple[bool, str]:
         if f.revenue_growth_3yr_cagr is None and f.gross_margin is None:
             return False, "Appears pre-revenue with no financial history"
 
+    # 2-year price momentum: reject persistent decliners
+    if f.return_2yr is not None and f.return_2yr < -30:
+        return False, f"2-year return {f.return_2yr:.0f}% — persistent decline suggests structural issues"
+
     return True, "OK"
+
+
+def get_technical_flags(f: Fundamentals) -> list[str]:
+    """Return warning flags for technical indicators (not rejections, just flags)."""
+    flags = []
+
+    # 200-DMA position: stock in a downtrend
+    if f.pct_from_200dma is not None and f.pct_from_200dma < -20:
+        flags.append(f"📉 {f.pct_from_200dma:.0f}% below 200-DMA — downtrend")
+
+    # Earnings revision: estimates being cut
+    if f.pe_revision_ratio is not None and f.pe_revision_ratio > 1.3:
+        flags.append(f"⚠ Forward P/E > trailing P/E (ratio {f.pe_revision_ratio:.1f}x) — estimates may be getting cut")
+
+    return flags
 
 
 # ---------------------------------------------------------------------------

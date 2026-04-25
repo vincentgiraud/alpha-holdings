@@ -220,6 +220,10 @@ class Fundamentals(BaseModel):
     drawdown_from_peak: Optional[float] = None
     ev_to_ebitda: Optional[float] = None
     avg_daily_volume: Optional[float] = None
+    # Technical indicators
+    return_2yr: Optional[float] = Field(default=None, description="2-year price return %")
+    pct_from_200dma: Optional[float] = Field(default=None, description="% distance from 200-day moving average")
+    pe_revision_ratio: Optional[float] = Field(default=None, description="forward_pe / trailing_pe. >1 = estimates cut, <1 = estimates rising")
     fetched_at: Optional[datetime] = None
 
 
