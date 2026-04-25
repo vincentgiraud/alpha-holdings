@@ -192,7 +192,7 @@ def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str
 
 
 @cli.command()
-@click.argument("file", type=click.Path(exists=True))
+@click.option("--file", "-f", required=True, type=click.Path(exists=True), help="Path to your holdings JSON file.")
 def holdings(file: str) -> None:
     """Analyze overlap between your existing holdings and the latest saved allocation."""
     from alpha_holdings.holdings import load_holdings, get_existing_exposure, analyze_overlap
@@ -532,9 +532,13 @@ def watchlist(theme_filter: str | None, tier: str | None, min_score: float) -> N
 @click.option("--from", "from_date", default=None, help="Start date YYYYMMDD (default: earliest allocation).")
 @click.option("--to", "to_date", default=None, help="End date YYYYMMDD (default: today).")
 @click.option("--benchmark", default="SPY", help="Benchmark ticker (default: SPY).")
-def backtest(from_date: str | None, to_date: str | None, benchmark: str) -> None:
-    """Compare historical theme allocations vs benchmark."""
-    from alpha_holdings.backtest import list_snapshots, load_allocation, compute_returns
+@click.option("--validate", is_flag=True, default=False, help="Run score validation analysis (do scores predict returns?).")
+def backtest(from_date: str | None, to_date: str | None, benchmark: str, validate: bool) -> None:
+    """Track record: compare historical allocations vs benchmark, validate scores."""
+    from alpha_holdings.backtest import (
+        list_snapshots,
+        full_backtest,
+    )
 
     snapshots = list_snapshots()
     if not snapshots:
@@ -545,18 +549,24 @@ def backtest(from_date: str | None, to_date: str | None, benchmark: str) -> None
         from_date = snapshots[0]
         console.print(f"Using earliest allocation: {from_date}")
 
-    alloc = load_allocation(from_date)
-    if not alloc:
-        console.print(f"[red]No allocation found for {from_date}. Available: {', '.join(snapshots)}[/red]")
-        return
-
-    console.rule(f"[bold]Backtest: {from_date} → {to_date or 'today'}[/bold]")
+    console.rule(f"[bold]Track Record: {from_date} → {to_date or 'today'}[/bold]")
     console.print(f"Benchmark: {benchmark}")
+    console.print("[dim]Fetching current prices...[/dim]")
     console.print()
 
-    results = compute_returns(alloc, from_date, to_date, benchmark)
+    result = full_backtest(from_date, to_date, benchmark)
+    if not result:
+        console.print(f"[red]No snapshot found for {from_date}. Available: {', '.join(snapshots)}[/red]")
+        return
 
-    # Per-ticker table
+    returns = result["returns"]
+    risk = result["risk_metrics"]
+    theme_attr = result["theme_attribution"]
+    tiers = result["tier_analysis"]
+    score_val = result["score_validation"]
+    conf = result["confidence_analysis"]
+
+    # --- Per-ticker table ---
     table = Table(title="Per-Ticker Returns", show_lines=True)
     table.add_column("Ticker", style="bold")
     table.add_column("Theme", max_width=30)
@@ -565,7 +575,7 @@ def backtest(from_date: str | None, to_date: str | None, benchmark: str) -> None
     table.add_column("Current", justify="right")
     table.add_column("Return %", justify="right")
 
-    for tr in sorted(results["ticker_returns"], key=lambda x: x.get("return_pct") or 0, reverse=True):
+    for tr in sorted(returns["ticker_returns"], key=lambda x: x.get("return_pct") or 0, reverse=True):
         ret = tr["return_pct"]
         ret_str = f"[green]+{ret:.1f}%[/green]" if ret and ret >= 0 else f"[red]{ret:.1f}%[/red]" if ret else "N/A"
         ep_str = f"${tr['entry_price']:.2f}" if tr["entry_price"] else "N/A"
@@ -580,41 +590,215 @@ def backtest(from_date: str | None, to_date: str | None, benchmark: str) -> None
         )
     console.print(table)
 
-    # Summary
+    # --- Portfolio summary ---
     console.print()
     summary = Table(title="Portfolio Summary", show_lines=True)
     summary.add_column("Metric", style="bold")
     summary.add_column("Value", justify="right")
 
-    tr_str = f"{results['thematic_return']:+.2f}%" if results["thematic_return"] else "N/A"
-    cr_str = f"{results['core_return']:+.2f}%" if results["core_return"] is not None else "N/A"
-    bl_str = f"{results['blended_return']:+.2f}%" if results["blended_return"] else "N/A"
-    bm_str = f"{results['benchmark_return']:+.2f}%" if results["benchmark_return"] is not None else "N/A"
-    alpha = results.get("alpha")
-    alpha_str = f"[green]+{alpha:.2f}%[/green]" if alpha and alpha > 0 else f"[red]{alpha:.2f}%[/red]" if alpha else "N/A"
-    dd_str = f"{results['max_drawdown']:.1f}%"
+    _add_return_row(summary, "Thematic return (weighted)", returns["thematic_return"])
+    _add_return_row(summary, "Core return (benchmark proxy)", returns["core_return"])
+    _add_return_row(summary, "Blended portfolio return", returns["blended_return"])
+    _add_return_row(summary, f"Benchmark ({benchmark})", returns["benchmark_return"])
 
-    summary.add_row("Thematic return (weighted)", tr_str)
-    summary.add_row("Core return (benchmark proxy)", cr_str)
-    summary.add_row("Blended portfolio return", bl_str)
-    summary.add_row(f"Benchmark ({benchmark})", bm_str)
-    summary.add_row("Alpha (blended - benchmark)", alpha_str)
-    summary.add_row("Max single-ticker drawdown", dd_str)
+    alpha = returns.get("alpha")
+    alpha_str = f"[green]+{alpha:.2f}%[/green]" if alpha and alpha > 0 else f"[red]{alpha:.2f}%[/red]" if alpha else "N/A"
+    summary.add_row("Alpha (blended − benchmark)", alpha_str)
+
+    days = risk.get("days_elapsed", 0)
+    summary.add_row("Days elapsed", str(days))
+    summary.add_row("Trading days", str(risk.get("trading_days", 0)))
+
+    if risk.get("annualized_volatility") is not None:
+        summary.add_row("Annualized volatility", f"{risk['annualized_volatility']:.1f}%")
+    if risk.get("sharpe_ratio") is not None:
+        sr = risk["sharpe_ratio"]
+        sr_style = "green" if sr > 0.5 else "yellow" if sr > 0 else "red"
+        summary.add_row("Sharpe ratio", f"[{sr_style}]{sr:.2f}[/{sr_style}]")
+    if risk.get("max_drawdown") is not None:
+        summary.add_row("Max drawdown (portfolio)", f"{risk['max_drawdown']:.1f}%")
+    if risk.get("benchmark_max_drawdown") is not None:
+        summary.add_row(f"Max drawdown ({benchmark})", f"{risk['benchmark_max_drawdown']:.1f}%")
+
+    # Win rate
+    rets_with_data = [tr["return_pct"] for tr in returns["ticker_returns"] if tr["return_pct"] is not None]
+    if rets_with_data:
+        win_rate = sum(1 for r in rets_with_data if r > 0) / len(rets_with_data) * 100
+        summary.add_row("Win rate (tickers > 0%)", f"{win_rate:.0f}% ({sum(1 for r in rets_with_data if r > 0)}/{len(rets_with_data)})")
     console.print(summary)
+
+    # --- Theme attribution ---
+    console.print()
+    ta_table = Table(title="Theme Attribution", show_lines=True)
+    ta_table.add_column("Theme", style="bold", max_width=35)
+    ta_table.add_column("Conf", justify="center")
+    ta_table.add_column("Score", justify="right")
+    ta_table.add_column("Weight %", justify="right")
+    ta_table.add_column("Return %", justify="right")
+    ta_table.add_column("Contrib.", justify="right")
+
+    for ta in theme_attr:
+        ret = ta.get("return_pct")
+        ret_str = f"[green]+{ret:.1f}%[/green]" if ret is not None and ret >= 0 else f"[red]{ret:.1f}%[/red]" if ret is not None else "N/A"
+        contrib = ta.get("contribution")
+        contrib_str = f"[green]+{contrib:.2f}[/green]" if contrib is not None and contrib >= 0 else f"[red]{contrib:.2f}[/red]" if contrib is not None else "N/A"
+        score_str = f"{ta['avg_score']:.0f}" if ta.get("avg_score") else "N/A"
+        ta_table.add_row(
+            ta["theme"][:35],
+            f"{ta.get('confidence', '?')}/10",
+            score_str,
+            f"{ta['weight_pct']:.1f}%",
+            ret_str,
+            contrib_str,
+        )
+    console.print(ta_table)
+
+    # --- Tier analysis ---
+    console.print()
+    tier_table = Table(title="Returns by Supply Chain Tier", show_lines=True)
+    tier_table.add_column("Tier", style="bold")
+    tier_table.add_column("N", justify="right")
+    tier_table.add_column("Avg Return", justify="right")
+    tier_table.add_column("Median Return", justify="right")
+    tier_table.add_column("Best", justify="right")
+    tier_table.add_column("Worst", justify="right")
+    tier_table.add_column("Win Rate", justify="right")
+
+    for t in tiers:
+        if not t.get("n_with_data"):
+            tier_table.add_row(t["label"], "0", "N/A", "N/A", "N/A", "N/A", "N/A")
+            continue
+        avg_ret = t["avg_return"]
+        avg_str = f"[green]+{avg_ret:.1f}%[/green]" if avg_ret >= 0 else f"[red]{avg_ret:.1f}%[/red]"
+        med_ret = t["median_return"]
+        med_str = f"[green]+{med_ret:.1f}%[/green]" if med_ret >= 0 else f"[red]{med_ret:.1f}%[/red]"
+        tier_table.add_row(
+            t["label"],
+            str(t["n_with_data"]),
+            avg_str,
+            med_str,
+            f"{t['best']:+.1f}%",
+            f"{t['worst']:+.1f}%",
+            f"{t['win_rate']:.0f}%",
+        )
+    console.print(tier_table)
+    console.print("[dim]'Sell shovels' thesis: Tier 3 should outperform Tier 1 over time.[/dim]")
+
+    # --- Score validation (if --validate or always show summary) ---
+    if validate and score_val:
+        console.print()
+        console.rule("[bold]Score Validation — Do Scores Predict Returns?[/bold]")
+        sv_table = Table(title="Score → Return Correlation", show_lines=True)
+        sv_table.add_column("Dimension", style="bold")
+        sv_table.add_column("N", justify="right")
+        sv_table.add_column("Rank ρ", justify="right")
+        sv_table.add_column("Top Q Return", justify="right")
+        sv_table.add_column("Bot Q Return", justify="right")
+        sv_table.add_column("Spread", justify="right")
+        sv_table.add_column("Signal", justify="center")
+
+        for sv in score_val:
+            rho = sv.get("rank_correlation")
+            rho_str = "N/A"
+            signal = ""
+            if rho is not None:
+                rho_color = "green" if rho > 0.2 else "yellow" if rho > 0 else "red"
+                rho_str = f"[{rho_color}]{rho:+.3f}[/{rho_color}]"
+                if rho > 0.3:
+                    signal = "[green]✓ predictive[/green]"
+                elif rho > 0.1:
+                    signal = "[yellow]~ weak signal[/yellow]"
+                elif rho > -0.1:
+                    signal = "[dim]— no signal[/dim]"
+                else:
+                    signal = "[red]✗ inverted[/red]"
+
+            spread = sv.get("spread", 0)
+            spread_str = f"[green]+{spread:.1f}pp[/green]" if spread > 0 else f"[red]{spread:.1f}pp[/red]"
+
+            top_ret = sv["top_quartile_return"]
+            bot_ret = sv["bottom_quartile_return"]
+            sv_table.add_row(
+                sv["label"],
+                str(sv["n_companies"]),
+                rho_str,
+                f"{top_ret:+.1f}%",
+                f"{bot_ret:+.1f}%",
+                spread_str,
+                signal,
+            )
+        console.print(sv_table)
+        console.print(
+            "[dim]ρ > 0.3 = strong signal, 0.1–0.3 = weak, < 0.1 = noise. "
+            "Spread = top quartile − bottom quartile return. "
+            "† = AI-estimated component.[/dim]"
+        )
+
+        # Confidence analysis
+        if conf.get("sufficient_data"):
+            console.print()
+            conf_table = Table(title="Theme Confidence → Returns", show_lines=True)
+            conf_table.add_column("Metric", style="bold")
+            conf_table.add_column("Value", justify="right")
+
+            conf_rho = conf.get("rank_correlation")
+            if conf_rho is not None:
+                color = "green" if conf_rho > 0.2 else "yellow" if conf_rho > 0 else "red"
+                conf_table.add_row("Rank correlation (ρ)", f"[{color}]{conf_rho:+.3f}[/{color}]")
+            if conf.get("high_confidence_avg") is not None:
+                conf_table.add_row(f"High confidence (≥8) avg return ({conf['high_count']} themes)", f"{conf['high_confidence_avg']:+.1f}%")
+            if conf.get("low_confidence_avg") is not None:
+                conf_table.add_row(f"Lower confidence (<8) avg return ({conf['low_count']} themes)", f"{conf['low_confidence_avg']:+.1f}%")
+            console.print(conf_table)
+    elif validate:
+        console.print()
+        console.print("[yellow]Not enough scored tickers with return data for score validation yet.[/yellow]")
+
+    # --- Track record maturity ---
+    console.print()
+    n_snapshots = len(snapshots)
+    if days < 30:
+        console.print(
+            f"[yellow]⚠ Track record: {days} days across {n_snapshots} snapshot(s). "
+            f"Too early for statistical significance. Run 'discover' periodically to build history.[/yellow]"
+        )
+    elif days < 90:
+        console.print(
+            f"[yellow]Track record: {days} days across {n_snapshots} snapshot(s). "
+            f"Early signal only — 6+ months recommended for meaningful validation.[/yellow]"
+        )
+    else:
+        console.print(
+            f"Track record: {days} days across {n_snapshots} snapshot(s)."
+        )
+
+    if n_snapshots < 3:
+        console.print("[dim]Tip: run 'discover' weekly/monthly to accumulate snapshots for cross-run comparison.[/dim]")
 
     console.print()
     console.print(
         "[dim italic]This backtest uses the tool's historical recommendations. "
         "Past performance does not predict future results. "
-        "Only works from when themes were first saved — cannot simulate past runs retroactively.[/dim italic]"
+        "Score validation requires multiple weeks of data to become statistically meaningful.[/dim italic]"
     )
     console.print()
     console.print(DISCLAIMER)
 
 
+def _add_return_row(table: Table, label: str, value) -> None:
+    """Add a return row with green/red coloring to a rich Table."""
+    if value is None:
+        table.add_row(label, "N/A")
+    elif value >= 0:
+        table.add_row(label, f"[green]+{value:.2f}%[/green]")
+    else:
+        table.add_row(label, f"[red]{value:.2f}%[/red]")
+
+
 @cli.command()
 @click.argument("what", type=click.Choice(["themes", "allocation"]))
-def show(what: str) -> None:
+@click.option("--as-holdings", is_flag=True, default=False, help="Export allocation as holdings JSON (for piping into 'holdings --file').")
+def show(what: str, as_holdings: bool) -> None:
     """Display saved themes or allocation data."""
     if what == "themes":
         from alpha_holdings import themes as theme_mod
@@ -630,13 +814,36 @@ def show(what: str) -> None:
             files = sorted(path.glob("*.json"), reverse=True)
             if files:
                 data = json.loads(files[0].read_text())
-                console.print_json(json.dumps(data, indent=2))
+                if as_holdings:
+                    holdings_list = _allocation_to_holdings(data)
+                    console.print_json(json.dumps(holdings_list, indent=2))
+                else:
+                    console.print_json(json.dumps(data, indent=2))
             else:
                 console.print("[yellow]No saved allocations.[/yellow]")
         else:
             console.print("[yellow]No saved allocations.[/yellow]")
     console.print()
     console.print(DISCLAIMER)
+
+
+def _allocation_to_holdings(alloc_data: dict) -> list[dict]:
+    """Convert an allocation dict into holdings-compatible JSON.
+
+    Produces [{"ticker": "...", "shares": 0, "avg_cost": entry_price}]
+    for each ticker in the allocation entries.
+    """
+    holdings: list[dict] = []
+    for entry in alloc_data.get("entries", []):
+        entry_prices = entry.get("entry_prices", {})
+        tickers = [t.strip() for t in entry.get("vehicle", "").split(",") if t.strip()]
+        for ticker in tickers:
+            holdings.append({
+                "ticker": ticker,
+                "shares": 0,
+                "avg_cost": entry_prices.get(ticker),
+            })
+    return holdings
 
 
 # ---------------------------------------------------------------------------

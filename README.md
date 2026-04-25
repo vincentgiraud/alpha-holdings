@@ -67,8 +67,8 @@ alpha-holdings discover --risk conservative --horizon 10yr+ --focus "energy infr
 Analyze overlap between your existing positions and the latest saved allocation. Run after `discover`.
 
 ```bash
-alpha-holdings holdings holdings.example.json
-alpha-holdings holdings data/my_portfolio.json
+alpha-holdings holdings --file holdings.example.json
+alpha-holdings holdings --file data/my_portfolio.json
 ```
 
 ### `alpha-holdings explain`
@@ -150,20 +150,32 @@ alpha-holdings watchlist --theme "AI" --tier 2 --min-score 70
 
 ### `alpha-holdings backtest`
 
-Compare historical theme allocations vs a benchmark (default: SPY). Computes per-ticker returns, weighted portfolio return, and alpha.
+Track record and model validation. Compares historical allocations vs a benchmark, attributes P&L by theme and supply chain tier, and optionally validates whether scores predict forward returns.
 
 ```bash
 alpha-holdings backtest                          # From earliest allocation to today
 alpha-holdings backtest --from 20260425          # From a specific date
 alpha-holdings backtest --from 20260425 --to 20260525 --benchmark VT
+alpha-holdings backtest --validate               # Include score validation analysis
 ```
+
+**Output includes:**
+- Per-ticker returns (entry price → current, weighted by allocation)
+- Portfolio summary: thematic return, core return, blended return, alpha, Sharpe ratio, max drawdown, win rate
+- Theme attribution: which themes contributed most to P&L, ranked by contribution
+- Tier analysis: avg/median returns by Tier 1 / 2 / 3 — tests the "sell shovels" thesis
+- Score validation (`--validate`): Spearman rank correlation + top/bottom quartile spread for each scoring dimension (composite, fundamental, thesis alignment, pricing gap)
+- Confidence analysis (`--validate`): whether high-confidence themes outperform low-confidence
 
 **Options:**
 - `--from` — Start date YYYYMMDD (default: earliest saved allocation).
 - `--to` — End date YYYYMMDD (default: today).
 - `--benchmark` — Benchmark ticker to compare against (default: `SPY`).
+- `--validate` — Run score validation analysis (rank correlation, quartile spreads).
 
-**Limitations:** Backtesting only works from when themes were first saved. Cannot simulate past runs retroactively. Past performance does not predict future results.
+**Building a track record:** Run `discover` periodically (weekly/monthly) to accumulate snapshots. Each snapshot records entry prices at discovery time. The backtest compares those frozen entry prices against current market prices. More snapshots = more statistical power for validating the model.
+
+**Limitations:** Backtesting only works from when themes were first saved. Cannot simulate past runs retroactively. Statistical significance requires 3+ months and multiple snapshots. Past performance does not predict future results.
 
 ### `alpha-holdings show`
 
@@ -172,7 +184,11 @@ Display saved data from previous runs.
 ```bash
 alpha-holdings show themes
 alpha-holdings show allocation
+alpha-holdings show allocation --as-holdings    # Export as holdings JSON
+alpha-holdings show allocation --as-holdings > data/my_positions.json  # Save for 'holdings --file'
 ```
+
+`--as-holdings` converts the allocation into the same `[{"ticker", "shares", "avg_cost"}]` format used by `holdings --file`, using entry prices as `avg_cost`. This lets you feed one run's output into the next for overlap analysis.
 
 ### Global Options
 
@@ -365,4 +381,4 @@ It also scans for **dip opportunities** — companies that dropped in price but 
 - **Unknown unknowns.** The tool discovers themes from public news and LLM reasoning. It cannot detect insider information, unpublished regulatory actions, or black swan events. Your broad market core allocation is your protection against what this tool cannot see.
 - **Tax implications.** Rebalancing and selling positions may trigger taxable capital gains events. Consult a tax advisor for your jurisdiction.
 - **FX risk.** International tickers carry currency risk and higher spread costs that are not reflected in the scoring.
-- **No backtesting yet.** The tool has no track record. Past themes and scores have not been validated against historical returns.
+- **Early track record.** The backtesting system validates scores against actual returns, but statistical significance requires 3+ months of history across multiple discovery snapshots. Early results should be treated as directional, not conclusive.
