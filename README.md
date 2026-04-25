@@ -61,6 +61,20 @@ alpha-holdings discover --risk conservative --horizon 10yr+ --focus "energy infr
 - `--focus` — Optional focus areas to bias theme discovery (repeatable). The system discovers themes autonomously; this biases but doesn't limit.
 - `--base-currency` — Your base currency code (default: `USD`). Non-base currency tickers will show ⚠ FX risk warnings. Exotic exchange tickers are flagged with broker accessibility tags.
 - `--capital` — Total capital to invest (e.g., `--capital 10000`). When set, the allocation table shows dollar amounts alongside percentages and flags positions below the $200 minimum viable size.
+- `--holdings` — Path to a JSON file listing your existing positions (e.g., `--holdings data/holdings.example.json`). Detects overlap between your current portfolio and recommended themes, including decomposition of index funds (VT, VOO, SPY, IWDA, VWCE) into their constituent holdings.
+
+### Holdings File Format
+
+Create a JSON file with your existing positions:
+
+```json
+[
+  {"ticker": "VT", "shares": 100, "avg_cost": 95.50},
+  {"ticker": "NVDA", "shares": 10, "avg_cost": 150.00}
+]
+```
+
+Index funds (VT, VOO, SPY, IWDA.AS, VWCE.DE) are automatically decomposed into their top holdings for overlap analysis. The tool first attempts to fetch live ETF compositions via yfinance; if unavailable, it falls back to built-in approximate weights. See [holdings.example.json](holdings.example.json) for a sample.
 
 ### `alpha-holdings monitor`
 

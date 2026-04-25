@@ -90,7 +90,8 @@ def cli(ctx: click.Context, verbose: bool, debug: bool) -> None:
 @click.option("--focus", multiple=True, help="Optional focus areas to bias discovery.")
 @click.option("--base-currency", default="USD", help="Your base currency (for FX risk flags).")
 @click.option("--capital", type=float, default=None, help="Total capital to invest (shows $ amounts in allocation).")
-def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str, capital: float | None) -> None:
+@click.option("--holdings", type=click.Path(exists=True), default=None, help="Path to holdings JSON file for overlap detection.")
+def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str, capital: float | None, holdings: str | None) -> None:
     """Full pipeline: signals → themes → fundamentals → scoring → allocation."""
     from alpha_holdings import allocation as alloc_mod
     from alpha_holdings import etfs as etfs_mod
@@ -181,6 +182,29 @@ def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str
     for t in themes:
         _print_supply_chain_tree(t, scores.get(t.name, []), fund_data, etf_recs.get(t.name), base_currency=base_currency.upper())
     _print_allocation(allocation)
+
+    # Holdings overlap analysis
+    if holdings:
+        from alpha_holdings.holdings import load_holdings, get_existing_exposure, analyze_overlap
+
+        hp = load_holdings(holdings)
+        if hp.holdings:
+            existing = get_existing_exposure(hp)
+            console.rule("[bold]Holdings Overlap Analysis[/bold]")
+            has_overlap = False
+            for entry in allocation.entries:
+                tickers = [t.strip() for t in entry.vehicle.split(",")]
+                overlaps = analyze_overlap(existing, tickers, entry.pct_allocation)
+                for o in overlaps:
+                    has_overlap = True
+                    console.print(
+                        f"  [yellow]⚠ {o['ticker']}[/yellow] — "
+                        f"you already hold ~{o['existing_pct']:.1f}% via index funds. "
+                        f"Adding [bold]{entry.theme}[/bold] brings effective weight to "
+                        f"~{o['combined_pct']:.1f}%"
+                    )
+            if not has_overlap:
+                console.print("  [green]No significant overlap between your holdings and recommended themes.[/green]")
 
     # Save
     theme_mod.save_themes(themes)

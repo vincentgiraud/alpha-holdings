@@ -1,0 +1,17 @@
+[
+  {
+    "ticker": "VT",
+    "shares": 100,
+    "avg_cost": 95.50
+  },
+  {
+    "ticker": "VOO",
+    "shares": 50,
+    "avg_cost": 420.00
+  },
+  {
+    "ticker": "NVDA",
+    "shares": 10,
+    "avg_cost": 150.00
+  }
+]
