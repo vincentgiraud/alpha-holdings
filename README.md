@@ -74,7 +74,13 @@ Create a JSON file with your existing positions:
 ]
 ```
 
-Index funds (VT, VOO, SPY, IWDA.AS, VWCE.DE) are automatically decomposed into their top holdings for overlap analysis. The tool first attempts to fetch live ETF compositions via yfinance; if unavailable, it falls back to built-in approximate weights. See [holdings.example.json](holdings.example.json) for a sample.
+Index funds and ETFs are automatically decomposed into their constituent holdings for overlap analysis using a 3-tier fallback:
+
+1. **yfinance** — live ETF holdings data (most accurate, but not always available)
+2. **LLM + web search** — asks the AI model to look up current holdings (works for any ETF)
+3. **Built-in data** — hardcoded approximate weights for 15 common ETFs (VT, VOO, SPY, QQQ, SMH, SOXX, XLK, URA, HACK, XME, XLE, ITA, IWDA.AS, VWCE.DE)
+
+This means any ETF you hold — including thematic ones like SMH, URA, or ARKK — will be decomposed for overlap detection. See [holdings.example.json](holdings.example.json) for a sample.
 
 ### `alpha-holdings monitor`
 

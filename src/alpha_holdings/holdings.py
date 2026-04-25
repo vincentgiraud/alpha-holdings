@@ -32,13 +32,22 @@ class HoldingsPortfolio(BaseModel):
 # Dynamic ETF decomposition + hardcoded fallback
 # ---------------------------------------------------------------------------
 
-# Fallback: hardcoded approximate top holdings (used when yfinance can't fetch)
+# Fallback: hardcoded approximate top holdings (used when yfinance + LLM can't fetch)
 _FALLBACK_COMPOSITIONS: dict[str, dict[str, float]] = {
     "VT": {"AAPL": 4.2, "MSFT": 3.8, "NVDA": 3.2, "AMZN": 2.5, "GOOGL": 1.5, "META": 1.5, "AVGO": 1.0, "2330.TW": 0.8, "005930.KS": 0.5},
     "VOO": {"AAPL": 7.0, "MSFT": 6.5, "NVDA": 5.5, "AMZN": 4.0, "GOOGL": 2.5, "META": 2.5, "AVGO": 1.7, "JPM": 1.5},
     "SPY": {"AAPL": 7.0, "MSFT": 6.5, "NVDA": 5.5, "AMZN": 4.0, "GOOGL": 2.5, "META": 2.5, "AVGO": 1.7, "JPM": 1.5},
     "IWDA.AS": {"AAPL": 5.0, "MSFT": 4.5, "NVDA": 3.8, "AMZN": 3.0, "GOOGL": 1.8, "META": 1.8, "AVGO": 1.2},
     "VWCE.DE": {"AAPL": 4.2, "MSFT": 3.8, "NVDA": 3.2, "AMZN": 2.5, "GOOGL": 1.5, "META": 1.5, "AVGO": 1.0},
+    "SMH": {"NVDA": 20.0, "TSM": 12.0, "AVGO": 8.0, "ASML": 5.0, "TXN": 5.0, "AMD": 4.5, "QCOM": 4.0, "AMAT": 4.0, "MU": 3.5, "INTC": 3.0},
+    "SOXX": {"NVDA": 9.0, "AVGO": 8.5, "AMD": 7.5, "QCOM": 5.5, "TXN": 5.0, "MU": 4.5, "AMAT": 4.0, "INTC": 3.5, "MRVL": 3.5, "TSM": 3.0},
+    "XLK": {"AAPL": 16.0, "MSFT": 14.0, "NVDA": 13.0, "AVGO": 5.0, "CRM": 2.5, "AMD": 2.0, "ADBE": 2.0, "ORCL": 2.0, "ACN": 2.0},
+    "QQQ": {"AAPL": 9.0, "MSFT": 8.0, "NVDA": 7.5, "AMZN": 5.5, "META": 4.5, "AVGO": 4.0, "GOOGL": 3.0, "GOOG": 2.5, "TSLA": 2.5, "COST": 2.5},
+    "URA": {"CCJ": 18.0, "NXE": 7.0, "UUUU": 5.5, "DNN": 4.5, "LEU": 4.0, "PDN.AX": 3.5, "DYL.AX": 3.0, "SRUUF": 3.0, "UEC": 3.0, "FCU.TO": 2.5},
+    "HACK": {"CRWD": 6.5, "FTNT": 6.0, "PANW": 5.5, "ZS": 4.0, "OKTA": 3.5, "CYBR": 3.5, "CHKP": 3.0, "MNDT": 3.0, "RPD": 2.5, "NET": 2.5},
+    "XME": {"NUE": 5.5, "STLD": 5.0, "FCX": 5.0, "AA": 4.5, "CLF": 4.0, "RS": 3.5, "CMC": 3.0, "ATI": 3.0, "MP": 2.5, "CRS": 2.5},
+    "XLE": {"XOM": 23.0, "CVX": 17.0, "COP": 5.0, "SLB": 4.5, "EOG": 4.0, "MPC": 4.0, "PXD": 3.5, "PSX": 3.5, "VLO": 3.0, "OXY": 2.5},
+    "ITA": {"RTX": 18.0, "LMT": 6.0, "GE": 5.0, "BA": 5.0, "NOC": 4.5, "GD": 4.0, "LHX": 4.0, "TDG": 3.5, "HII": 3.0, "TXT": 2.5},
 }
 
 # Cache for dynamically fetched ETF compositions
@@ -111,7 +120,31 @@ def _fetch_etf_composition(ticker: str) -> dict[str, float]:
     except Exception as exc:
         log.debug("yfinance ticker init failed for %s: %s", ticker, exc)
 
-    # Fallback to hardcoded
+    # Fallback 2: ask LLM for approximate composition (with web search for accuracy)
+    try:
+        from alpha_holdings import llm
+        from alpha_holdings.signals import _extract_json
+
+        prompt = (
+            f"For educational research purposes only. "
+            f"What are the approximate top 10 holdings and their weights (%) "
+            f"in the ETF '{ticker}'? Search the web for the latest holdings. "
+            f"Return ONLY a JSON object mapping "
+            f"ticker symbols to weight percentages, e.g. {{\"NVDA\": 20.0, \"TSM\": 12.0}}. "
+            f"If you cannot determine the holdings, return an empty object {{}}."
+        )
+        raw = llm.respond_text(prompt, mini=True, web_search=True)
+        data = json.loads(_extract_json(raw))
+        if isinstance(data, dict) and data:
+            composition = {k.upper(): round(float(v), 2) for k, v in data.items() if float(v) > 0}
+            if composition:
+                log.info("Fetched %d holdings for %s via LLM", len(composition), ticker)
+                _etf_composition_cache[ticker] = composition
+                return composition
+    except Exception as exc:
+        log.debug("LLM composition fetch failed for %s: %s", ticker, exc)
+
+    # Fallback 3: hardcoded
     if ticker in _FALLBACK_COMPOSITIONS:
         log.debug("Using hardcoded fallback composition for %s", ticker)
         _etf_composition_cache[ticker] = _FALLBACK_COMPOSITIONS[ticker]

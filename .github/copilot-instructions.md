@@ -34,3 +34,11 @@ Autonomous thematic investment research CLI tool. Discovers bullish investment t
 After any code change that adds, modifies, or removes a feature, flag, or behavior:
 update the relevant documentation (README.md, script docstrings, CLI --help text, .env.example).
 Never leave code and docs out of sync. The end user relies on docs to discover and use all options.
+
+## Testing
+After any code change, verify it works before committing:
+- Run a targeted test (mock data or quick CLI command) to confirm the change doesn't break existing functionality.
+- For new CLI flags: verify they appear in `--help` and produce the expected output.
+- For new modules: verify imports succeed and core functions return expected results with sample data.
+- For display changes: visually confirm the output renders correctly in the terminal.
+- Never commit untested code. If a full e2e run is too slow, test the specific function in isolation first.

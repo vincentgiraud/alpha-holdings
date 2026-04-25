@@ -190,12 +190,42 @@ def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str
         hp = load_holdings(holdings)
         if hp.holdings:
             existing = get_existing_exposure(hp)
+            held_tickers = {h.ticker.upper() for h in hp.holdings}
             console.rule("[bold]Holdings Overlap Analysis[/bold]")
             has_overlap = False
+
+            # Check core allocation overlap (VT, VOO, etc.)
+            core_vehicles = {"VT", "VOO", "SPY", "IWDA.AS", "VWCE.DE"}
+            core_overlap = held_tickers & core_vehicles
+            if core_overlap:
+                has_overlap = True
+                core_amt = f" (${allocation.capital * allocation.core_pct / 100:,.0f})" if allocation.capital else ""
+                for t in core_overlap:
+                    console.print(
+                        f"  [cyan]ℹ {t}[/cyan] — you already hold this. "
+                        f"Core allocation of {allocation.core_pct:.0f}%{core_amt} adds to your existing position."
+                    )
+
+            # Check thematic allocation overlap
             for entry in allocation.entries:
                 tickers = [t.strip() for t in entry.vehicle.split(",")]
+
+                # Direct overlap: user holds the exact recommended ticker
+                for t in tickers:
+                    if t.upper() in held_tickers:
+                        has_overlap = True
+                        console.print(
+                            f"  [yellow]⚠ {t}[/yellow] — you already hold this directly. "
+                            f"[bold]{entry.theme}[/bold] adds {entry.pct_allocation:.1f}% — "
+                            f"review your total desired exposure before sizing."
+                        )
+
+                # Indirect overlap: user holds an index that contains a recommended ticker
                 overlaps = analyze_overlap(existing, tickers, entry.pct_allocation)
                 for o in overlaps:
+                    # Skip if already flagged as direct holding
+                    if o["ticker"].upper() in held_tickers:
+                        continue
                     has_overlap = True
                     console.print(
                         f"  [yellow]⚠ {o['ticker']}[/yellow] — "
@@ -203,6 +233,7 @@ def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str
                         f"Adding [bold]{entry.theme}[/bold] brings effective weight to "
                         f"~{o['combined_pct']:.1f}%"
                     )
+
             if not has_overlap:
                 console.print("  [green]No significant overlap between your holdings and recommended themes.[/green]")
 
