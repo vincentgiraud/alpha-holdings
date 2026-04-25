@@ -197,6 +197,15 @@ def respond_text(
         domain_filter=domain_filter,
         reasoning=reasoning,
     )
+
+    # Log reasoning summary if present
+    if reasoning:
+        for item in getattr(response, "output", []):
+            if getattr(item, "type", None) == "reasoning":
+                for block in getattr(item, "summary", []):
+                    if hasattr(block, "text") and block.text:
+                        log.info("Reasoning summary: %s", block.text[:500])
+
     text = response.output_text
     if not text:
         # output_text can be None if the response only has tool calls

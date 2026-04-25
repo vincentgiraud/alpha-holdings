@@ -51,12 +51,12 @@ def discover_themes(
         focus_clause=focus_clause,
     )
 
-    log.info("Discovering themes via web search + reasoning (high)...")
-    raw = llm.respond_text(prompt, web_search=True, reasoning="high")
+    log.info("Discovering themes via web search...")
+    raw = llm.respond_text(prompt, web_search=True)
 
     if not raw or not raw.strip():
         log.warning("Theme discovery returned empty response. Retrying without web search...")
-        raw = llm.respond_text(prompt, reasoning="high")
+        raw = llm.respond_text(prompt)
 
     # Detect content safety refusal and retry with softer framing
     refusal_phrases = ("i'm sorry", "i cannot", "i can't", "unable to assist", "cannot assist")
@@ -71,7 +71,7 @@ def discover_themes(
             "Return ONLY a JSON array in the same format as described below.\n\n"
             + prompt
         )
-        raw = llm.respond_text(softer_prompt, web_search=True, reasoning="high")
+        raw = llm.respond_text(softer_prompt, web_search=True)
 
     try:
         data = json.loads(_extract_json(raw))
@@ -150,8 +150,8 @@ def _gap_check(themes: list[ThemeThesis]) -> list[dict]:
 
     prompt = THEME_GAP_CHECK_PROMPT.format(pass1_summary=pass1_summary)
 
-    log.info("Gap-check: asking LLM to find missing companies and layers (high reasoning)...")
-    raw = llm.respond_text(prompt, web_search=True, reasoning="high")
+    log.info("Gap-check: asking LLM to find missing companies and layers...")
+    raw = llm.respond_text(prompt, web_search=True)
 
     if not raw or not raw.strip():
         log.warning("Gap-check returned empty response.")
