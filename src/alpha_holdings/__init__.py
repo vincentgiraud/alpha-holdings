@@ -1,3 +1,1 @@
-"""Alpha Holdings: portfolio research and optimization engine."""
-
-__version__ = "0.1.0"
+"""Alpha Holdings — Autonomous thematic investment research tool."""

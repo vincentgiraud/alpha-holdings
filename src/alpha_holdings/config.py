@@ -1,51 +1,86 @@
-"""Configuration and settings for alpha-holdings.
+"""Risk profile configuration and allocation defaults."""
 
-Reads from environment variables and provides sensible defaults.
-"""
+from __future__ import annotations
 
-import os
-from pathlib import Path
+from alpha_holdings.models import RiskAppetite, TimeHorizon, RiskProfile
 
-# Data storage paths
-DATA_STORAGE_PATH = Path(os.getenv("DATA_STORAGE_PATH", "./data"))
-DATABASE_URL = os.getenv("DATABASE_URL", "duckdb:///./alpha.duckdb")
-STORAGE_BACKEND = os.getenv("STORAGE_BACKEND", "local")
+# ---------------------------------------------------------------------------
+# Allocation matrix: (appetite, horizon) → thematic %
+# ---------------------------------------------------------------------------
 
-# Future cloud-storage configuration (used when STORAGE_BACKEND=azure_blob)
-AZURE_STORAGE_ACCOUNT_URL = os.getenv("AZURE_STORAGE_ACCOUNT_URL")
-AZURE_STORAGE_CONTAINER = os.getenv("AZURE_STORAGE_CONTAINER")
-AZURE_STORAGE_PREFIX = os.getenv("AZURE_STORAGE_PREFIX", "alpha-holdings")
+THEMATIC_PCT: dict[tuple[RiskAppetite, TimeHorizon], float] = {
+    (RiskAppetite.CONSERVATIVE, TimeHorizon.SHORT): 0.30,
+    (RiskAppetite.CONSERVATIVE, TimeHorizon.MEDIUM): 0.20,
+    (RiskAppetite.CONSERVATIVE, TimeHorizon.LONG): 0.15,
+    (RiskAppetite.MODERATE, TimeHorizon.SHORT): 0.50,
+    (RiskAppetite.MODERATE, TimeHorizon.MEDIUM): 0.40,
+    (RiskAppetite.MODERATE, TimeHorizon.LONG): 0.30,
+    (RiskAppetite.AGGRESSIVE, TimeHorizon.SHORT): 0.75,
+    (RiskAppetite.AGGRESSIVE, TimeHorizon.MEDIUM): 0.55,
+    (RiskAppetite.AGGRESSIVE, TimeHorizon.LONG): 0.40,
+}
 
-# Data source configuration
-DATA_SOURCE = os.getenv("DATA_SOURCE", "yahoo")
-FALLBACK_DATA_SOURCE = os.getenv("FALLBACK_DATA_SOURCE", "stooq")
+# Max single-theme concentration by appetite
+MAX_THEME_PCT: dict[RiskAppetite, float] = {
+    RiskAppetite.CONSERVATIVE: 0.10,
+    RiskAppetite.MODERATE: 0.15,
+    RiskAppetite.AGGRESSIVE: 0.25,
+}
 
-# Provider feature flags
-ENABLE_EDGAR = os.getenv("ENABLE_EDGAR", "true").lower() == "true"
-ENABLE_FRED = os.getenv("ENABLE_FRED", "true").lower() == "true"
+# Minimum funded themes by appetite
+MIN_THEMES: dict[RiskAppetite, int] = {
+    RiskAppetite.CONSERVATIVE: 2,
+    RiskAppetite.MODERATE: 3,
+    RiskAppetite.AGGRESSIVE: 3,
+}
 
-# Benchmark configuration
-BENCHMARK_SYMBOL = os.getenv("BENCHMARK_SYMBOL", "SPY")
-BENCHMARK_PROXY_EQUITY = os.getenv("BENCHMARK_PROXY_EQUITY", "SPY")
-BENCHMARK_PROXY_BOND = os.getenv("BENCHMARK_PROXY_BOND", "BND")
+# Regime confidence gates: minimum theme confidence to fund
+REGIME_MIN_CONFIDENCE: dict[str, int] = {
+    "bull": 5,
+    "neutral": 7,
+    "bear": 8,
+}
 
-# Logging
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
-LOG_FORMAT = os.getenv("LOG_FORMAT", "json")
+# Regime allocation modifier (multiplied into thematic %)
+REGIME_MODIFIER: dict[str, float] = {
+    "bull": 1.0,
+    "neutral": 0.8,
+    "bear": 0.5,
+}
 
-# Analysis
-ANALYSIS_LOOKBACK_DAYS = int(os.getenv("ANALYSIS_LOOKBACK_DAYS", "252"))
-CONFIDENCE_LEVEL = float(os.getenv("CONFIDENCE_LEVEL", "0.95"))
+# Scoring weights (must sum to 1.0)
+SCORING_WEIGHTS = {
+    "fundamental": 0.40,
+    "thesis_alignment": 0.30,
+    "pricing_gap": 0.30,
+}
 
-# Universe/scoring defaults
-UNIVERSE_LOOKBACK_DAYS = int(os.getenv("UNIVERSE_LOOKBACK_DAYS", "20"))
-UNIVERSE_MIN_AVG_DOLLAR_VOLUME = float(os.getenv("UNIVERSE_MIN_AVG_DOLLAR_VOLUME", "1000000"))
-SCORE_LOOKBACK_DAYS = int(os.getenv("SCORE_LOOKBACK_DAYS", "20"))
-_seed_path_raw = os.getenv("UNIVERSE_SEED_PATH")
-UNIVERSE_SEED_PATH: Path | None = Path(_seed_path_raw) if _seed_path_raw else None
-UNIVERSE_BASE_CURRENCY = os.getenv("UNIVERSE_BASE_CURRENCY", "USD")
+# Trusted financial news domains for web search filtering
+NEWS_DOMAINS = [
+    "reuters.com",
+    "ft.com",
+    "cnbc.com",
+    "bloomberg.com",
+    "seekingalpha.com",
+    "wsj.com",
+    "barrons.com",
+    "economist.com",
+    "marketwatch.com",
+]
+
+# Quality filters for robustness
+MIN_MARKET_CAP = 500_000_000  # $500M
+MIN_AVG_DAILY_VOLUME = 1_000_000  # $1M daily volume
+QUALITY_FLOOR = {
+    "max_debt_to_equity": 300,
+    "min_operating_margin": -20,  # allow some negative, but not deep losses
+    "require_revenue": True,  # must have non-zero market cap as proxy
+}
 
 
-def ensure_storage_paths():
-    """Create storage directories if they don't exist."""
-    DATA_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
+def get_thematic_pct(profile: RiskProfile) -> float:
+    return THEMATIC_PCT[(profile.appetite, profile.time_horizon)]
+
+
+def get_max_theme_pct(profile: RiskProfile) -> float:
+    return MAX_THEME_PCT[profile.appetite]

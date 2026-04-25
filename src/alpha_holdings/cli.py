@@ -1,589 +1,452 @@
-"""Command-line interface for alpha-holdings.
+"""CLI entry point for Alpha Holdings."""
 
-Entry points for workflows: refresh, score, construct, backtest, analyze, and report.
-"""
+from __future__ import annotations
 
 import json
-from datetime import UTC, date, datetime, timedelta
+import logging
+import sys
 from pathlib import Path
 
-import pandas as pd
-import typer
+import click
+from rich.console import Console
+from rich.table import Table
+from rich.tree import Tree
+from rich.panel import Panel
+from rich.text import Text
 
-app = typer.Typer(help="Alpha Holdings: Free-Data Upgradeable Strategy Engine")
+from alpha_holdings.models import (
+    EntryMethod,
+    MacroRegimeType,
+    OpportunityType,
+    RiskAppetite,
+    RiskProfile,
+    SupplyChainTier,
+    TimeHorizon,
+    Urgency,
+)
 
+console = Console()
 
-@app.command()
-def version():
-    """Show version information."""
-    from alpha_holdings import __version__
+DISCLAIMER = (
+    "[dim italic]NOT FINANCIAL ADVICE — this is an AI-assisted research tool. "
+    "Verify all data before making investment decisions.[/dim italic]"
+)
 
-    typer.echo(f"alpha-holdings {__version__}")
-
-
-@app.command()
-def check():
-    """Check configuration and data availability."""
-    from alpha_holdings import config
-
-    typer.echo("Checking configuration...")
-    typer.echo(f"  DATA_STORAGE_PATH: {config.DATA_STORAGE_PATH}")
-    typer.echo(f"  DATABASE_URL: {config.DATABASE_URL}")
-    typer.echo(f"  DATA_SOURCE: {config.DATA_SOURCE}")
-    typer.echo(f"  BENCHMARK_SYMBOL: {config.BENCHMARK_SYMBOL}")
-    typer.echo("✅ Configuration loaded successfully")
-
-
-@app.command()
-def refresh(
-    universe: str = typer.Option(..., help="Path to universe CSV"),
-    start_date: str | None = typer.Option(
-        None, help="Start date (YYYY-MM-DD). Default: 90 days ago"
-    ),
-    end_date: str | None = typer.Option(None, help="End date (YYYY-MM-DD). Default: today"),
-):
-    """Refresh data from free sources."""
-    from alpha_holdings import config
-    from alpha_holdings.data.refresh import refresh_prices
-    from alpha_holdings.data.storage import build_storage_backend
-
-    universe_path = Path(universe)
-    parsed_end = _parse_date_or_default(end_date, default=date.today())
-    parsed_start = _parse_date_or_default(
-        start_date,
-        default=parsed_end - timedelta(days=90),
-    )
-
-    backend = build_storage_backend(
-        backend=config.STORAGE_BACKEND,
-        root_path=config.DATA_STORAGE_PATH,
-        database_path=_database_path_from_url(config.DATABASE_URL),
-        azure_account_url=config.AZURE_STORAGE_ACCOUNT_URL,
-        azure_container=config.AZURE_STORAGE_CONTAINER,
-        azure_prefix=config.AZURE_STORAGE_PREFIX,
-    )
-
-    summary = refresh_prices(
-        universe_path=universe_path,
-        start_date=parsed_start,
-        end_date=parsed_end,
-        storage=backend,
-        preferred_source=config.DATA_SOURCE,
-        fallback_source=config.FALLBACK_DATA_SOURCE,
-    )
-
-    typer.echo("Refresh complete")
-    typer.echo(f"  Requested: {summary.tickers_requested}")
-    typer.echo(f"  Succeeded: {summary.tickers_succeeded}")
-    typer.echo(f"  Failed:    {summary.tickers_failed}")
-    typer.echo(f"  Snapshots: {summary.snapshots_written}")
-    if summary.failures:
-        typer.echo(f"  Failed tickers: {', '.join(summary.failures)}")
-
-    manifest_path = _write_run_manifest(
-        storage=backend,
-        workflow="refresh",
-        inputs={
-            "universe": str(universe_path),
-            "start_date": parsed_start.isoformat(),
-            "end_date": parsed_end.isoformat(),
-            "preferred_source": config.DATA_SOURCE,
-            "fallback_source": config.FALLBACK_DATA_SOURCE,
-        },
-        outputs={
-            "tickers_requested": summary.tickers_requested,
-            "tickers_succeeded": summary.tickers_succeeded,
-            "tickers_failed": summary.tickers_failed,
-            "price_snapshots_written": summary.price_snapshots_written,
-            "fundamentals_snapshots_written": summary.fundamentals_snapshots_written,
-            "snapshot_paths": [str(path) for path in summary.snapshot_paths],
-        },
-        warnings=summary.failures,
-    )
-    typer.echo(f"  Manifest:  {manifest_path}")
+REGIME_BADGE = {
+    MacroRegimeType.BULL: "[bold green]🟢 BULL[/bold green]",
+    MacroRegimeType.NEUTRAL: "[bold yellow]🟡 NEUTRAL[/bold yellow]",
+    MacroRegimeType.BEAR: "[bold red]🔴 BEAR[/bold red]",
+}
 
 
-@app.command(name="list-snapshots")
-def list_snapshots(
-    dataset: str | None = typer.Option(None, help="Filter by dataset name"),
-):
-    """List registered data snapshots."""
-    from alpha_holdings import config
-    from alpha_holdings.data.storage import build_storage_backend
+@click.group()
+@click.option("--verbose", "-v", is_flag=True, help="Enable debug logging.")
+@click.option("--debug", is_flag=True, help="Dump raw API responses to data/debug/.")
+@click.pass_context
+def cli(ctx: click.Context, verbose: bool, debug: bool) -> None:
+    """Alpha Holdings — Autonomous thematic investment research."""
+    ctx.ensure_object(dict)
+    ctx.obj["debug"] = debug
 
-    backend = build_storage_backend(
-        backend=config.STORAGE_BACKEND,
-        root_path=config.DATA_STORAGE_PATH,
-        database_path=_database_path_from_url(config.DATABASE_URL),
-        azure_account_url=config.AZURE_STORAGE_ACCOUNT_URL,
-        azure_container=config.AZURE_STORAGE_CONTAINER,
-        azure_prefix=config.AZURE_STORAGE_PREFIX,
-    )
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(level=level, format="%(levelname)s %(name)s: %(message)s")
 
-    snapshots = backend.list_snapshots(dataset_filter=dataset)
-    if not snapshots:
-        typer.echo("No snapshots found.")
+    # Silence noisy third-party loggers — only show at DEBUG (-v)
+    if not verbose:
+        for noisy in ("azure", "httpx", "httpcore", "urllib3", "openai._base_client"):
+            logging.getLogger(noisy).setLevel(logging.WARNING)
+
+    if debug:
+        from alpha_holdings import llm as llm_mod
+        llm_mod.DEBUG_DUMP = True
+        console.print("[yellow]Debug mode: raw API responses will be saved to data/debug/[/yellow]")
+
+
+@cli.command()
+@click.option(
+    "--risk",
+    type=click.Choice(["conservative", "moderate", "aggressive"]),
+    default="moderate",
+    help="Risk appetite.",
+)
+@click.option(
+    "--horizon",
+    type=click.Choice(["3-5yr", "5-10yr", "10yr+"]),
+    default="3-5yr",
+    help="Investment time horizon.",
+)
+@click.option("--focus", multiple=True, help="Optional focus areas to bias discovery.")
+def discover(risk: str, horizon: str, focus: tuple[str, ...]) -> None:
+    """Full pipeline: signals → themes → fundamentals → scoring → allocation."""
+    from alpha_holdings import allocation as alloc_mod
+    from alpha_holdings import etfs as etfs_mod
+    from alpha_holdings import fundamentals as fund_mod
+    from alpha_holdings import scoring as score_mod
+    from alpha_holdings import signals as sig_mod
+    from alpha_holdings import themes as theme_mod
+
+    profile = RiskProfile(appetite=RiskAppetite(risk), time_horizon=TimeHorizon(horizon))
+    focus_areas = list(focus) if focus else None
+
+    # Step 1: Macro signals
+    console.rule("[bold]Step 1: Collecting Macro Signals[/bold]")
+    signals = sig_mod.collect_signals()
+    regime = sig_mod.assess_regime()
+    _print_regime(regime)
+    _print_signals(signals)
+
+    # Step 2: Theme discovery
+    console.rule("[bold]Step 2: Discovering Themes[/bold]")
+    themes = theme_mod.discover_themes(signals, regime, focus_areas=focus_areas)
+    if not themes:
+        console.print("[red]No themes discovered. Exiting.[/red]")
+        return
+    deps = theme_mod.map_dependencies(themes)
+    _print_themes(themes)
+    if deps:
+        _print_dependencies(deps)
+
+    # Step 3: Fundamentals
+    console.rule("[bold]Step 3: Fetching Fundamentals[/bold]")
+    all_tickers = []
+    for t in themes:
+        all_tickers.extend(c.full_ticker for c in t.all_companies)
+    fund_data = fund_mod.fetch_batch(list(set(all_tickers)))
+    console.print(f"Fetched fundamentals for {len(fund_data)} tickers.")
+
+    # Step 3b: Quality filter — remove companies that fail minimum thresholds
+    filtered_count = 0
+    for t in themes:
+        for sub in t.sub_themes:
+            original = len(sub.companies)
+            kept = []
+            for c in sub.companies:
+                f = fund_data.get(c.full_ticker)
+                if f:
+                    passes, reason = fund_mod.passes_quality_filter(f)
+                    if passes:
+                        kept.append(c)
+                    else:
+                        console.print(f"  [dim]Filtered out {c.full_ticker} ({c.name}): {reason}[/dim]")
+                        filtered_count += 1
+                else:
+                    kept.append(c)  # keep if no data — score with defaults
+            sub.companies = kept
+    if filtered_count:
+        console.print(f"[yellow]Filtered {filtered_count} companies below quality thresholds.[/yellow]")
+
+    # Step 4: Scoring
+    console.rule("[bold]Step 4: Scoring Companies[/bold]")
+    scores: dict[str, list] = {}
+    for t in themes:
+        theme_scores = []
+        for c in t.all_companies:
+            f = fund_data.get(c.full_ticker)
+            if f:
+                s = score_mod.score_company(c, t, f, all_fundamentals=fund_data)
+                theme_scores.append(s)
+        scores[t.name] = theme_scores
+
+    # Step 5: ETF mapping
+    console.rule("[bold]Step 5: ETF Mapping[/bold]")
+    etf_recs = {}
+    for t in themes:
+        etf_recs[t.name] = etfs_mod.find_etf(t)
+
+    # Step 6: Allocation
+    console.rule("[bold]Step 6: Portfolio Allocation[/bold]")
+    allocation = alloc_mod.allocate(themes, scores, etf_recs, profile, regime)
+
+    # Display results
+    console.rule("[bold]Results[/bold]")
+    for t in themes:
+        _print_supply_chain_tree(t, scores.get(t.name, []), fund_data, etf_recs.get(t.name))
+    _print_allocation(allocation)
+
+    # Save
+    theme_mod.save_themes(themes)
+    _save_allocation(allocation)
+
+    console.print()
+    console.print(DISCLAIMER)
+
+
+@cli.command()
+@click.option("--theme", default=None, help="Re-evaluate a specific theme only.")
+def monitor(theme: str | None) -> None:
+    """Course correction: re-evaluate saved themes against fresh signals."""
+    from alpha_holdings import monitor as mon_mod
+    from alpha_holdings import themes as theme_mod
+
+    themes = theme_mod.load_latest_themes()
+    if not themes:
+        console.print("[yellow]No saved themes found. Run 'discover' first.[/yellow]")
         return
 
-    header = f"{'DATASET':<20} {'AS_OF':<26} {'ROWS':>6}  SOURCE"
-    typer.echo(header)
-    typer.echo("-" * len(header))
-    for s in snapshots:
-        as_of = str(s["as_of"])[:19]
-        source = s["metadata"].get("source", "-")
-        typer.echo(f"{s['dataset']:<20} {as_of:<26} {s['row_count']:>6}  {source}")
+    if theme:
+        themes = [t for t in themes if t.name.lower() == theme.lower()]
 
-
-@app.command(name="show-snapshot")
-def show_snapshot(
-    dataset: str = typer.Option(..., help="Dataset name (e.g. 'prices_aapl')"),
-    as_of: str = typer.Option(
-        ..., help="As-of datetime prefix (e.g. '2026-03-23' or full UTC stamp)"
-    ),
-    limit: int = typer.Option(20, help="Maximum rows to display"),
-):
-    """Display contents of a snapshot."""
-    from alpha_holdings import config
-    from alpha_holdings.data.storage import build_storage_backend
-
-    backend = build_storage_backend(
-        backend=config.STORAGE_BACKEND,
-        root_path=config.DATA_STORAGE_PATH,
-        database_path=_database_path_from_url(config.DATABASE_URL),
-        azure_account_url=config.AZURE_STORAGE_ACCOUNT_URL,
-        azure_container=config.AZURE_STORAGE_CONTAINER,
-        azure_prefix=config.AZURE_STORAGE_PREFIX,
-    )
-
-    try:
-        df = backend.read_snapshot(dataset=dataset, as_of=as_of)
-    except FileNotFoundError as exc:
-        typer.secho(str(exc), fg=typer.colors.RED, err=True)
-        raise typer.Exit(1) from exc
-
-    total = len(df)
-    typer.echo(f"Snapshot: dataset={dataset!r}  rows={total}")
-    typer.echo(df.head(limit).to_string(index=False))
-    if total > limit:
-        typer.echo(f"... {total - limit} more rows (use --limit to show more)")
-
-
-@app.command()
-def score(date: str = typer.Option(..., help="Score as-of date prefix (YYYY-MM-DD)")):
-    """Compute equity scores from persisted snapshots."""
-    from alpha_holdings import config
-    from alpha_holdings.data.storage import build_storage_backend
-    from alpha_holdings.scoring import score_equities_from_snapshots
-
-    backend = build_storage_backend(
-        backend=config.STORAGE_BACKEND,
-        root_path=config.DATA_STORAGE_PATH,
-        database_path=_database_path_from_url(config.DATABASE_URL),
-        azure_account_url=config.AZURE_STORAGE_ACCOUNT_URL,
-        azure_container=config.AZURE_STORAGE_CONTAINER,
-        azure_prefix=config.AZURE_STORAGE_PREFIX,
-    )
-
-    try:
-        summary = score_equities_from_snapshots(
-            storage=backend,
-            as_of=date,
-            lookback_days=config.SCORE_LOOKBACK_DAYS,
-            min_avg_dollar_volume=config.UNIVERSE_MIN_AVG_DOLLAR_VOLUME,
-            seed_universe_path=config.UNIVERSE_SEED_PATH,
-            base_currency=config.UNIVERSE_BASE_CURRENCY,
+    console.rule("[bold]Course Correction[/bold]")
+    updates = []
+    for t in themes:
+        console.print(f"Re-evaluating: [bold]{t.name}[/bold]...")
+        update = mon_mod.check_thesis(t)
+        updates.append(update)
+        status_color = {
+            "strengthened": "green",
+            "unchanged": "white",
+            "weakened": "yellow",
+            "invalidated": "red",
+        }
+        color = status_color.get(update.status.value, "white")
+        console.print(
+            f"  [{color}]{update.status.value.upper()}[/{color}] "
+            f"({update.previous_confidence} → {update.new_confidence}/10): {update.reason}"
         )
-    except ValueError as exc:
-        typer.secho(str(exc), fg=typer.colors.RED, err=True)
-        raise typer.Exit(1) from exc
 
-    typer.echo(
-        f"Scored {summary.securities_scored}/{summary.universe_size} symbols as of {summary.as_of}."
-    )
-    if summary.skipped:
-        typer.echo(f"Skipped: {', '.join(summary.skipped)}")
-    typer.echo(f"Snapshot written: {summary.snapshot_path}")
-    typer.echo(
-        summary.scores[
-            [
-                "rank",
-                "symbol",
-                "composite_score",
-                "factor_momentum",
-                "factor_low_volatility",
-                "factor_liquidity",
-            ]
-        ].to_string(index=False)
-    )
+    # Rebalancing signals
+    rebal = mon_mod.generate_rebalance_signals(themes, updates)
+    if rebal:
+        _print_rebalance_signals(rebal)
 
-    manifest_path = _write_run_manifest(
-        storage=backend,
-        workflow="score",
-        inputs={
-            "as_of": date,
-            "lookback_days": config.SCORE_LOOKBACK_DAYS,
-            "min_avg_dollar_volume": config.UNIVERSE_MIN_AVG_DOLLAR_VOLUME,
-            "seed_universe_path": str(config.UNIVERSE_SEED_PATH),
-            "base_currency": config.UNIVERSE_BASE_CURRENCY,
-        },
-        outputs={
-            "universe_size": summary.universe_size,
-            "securities_scored": summary.securities_scored,
-            "snapshot_path": str(summary.snapshot_path),
-        },
-        warnings=summary.skipped,
-    )
-    typer.echo(f"Manifest written: {manifest_path}")
+    # Opportunity scan
+    console.rule("[bold]Opportunity Scan[/bold]")
+    opps = mon_mod.scan_opportunities(themes)
+    _print_opportunities(opps)
+
+    console.print()
+    console.print(DISCLAIMER)
 
 
-@app.command()
-def construct(date: str = typer.Option(..., help="Construction date (YYYY-MM-DD)")):
-    """Construct target portfolio from equity scores."""
-    from alpha_holdings import config
-    from alpha_holdings.data.storage import build_storage_backend
-    from alpha_holdings.portfolio import construct_portfolio
+@cli.command()
+def opportunities() -> None:
+    """Quick scan for dip opportunities across funded themes."""
+    from alpha_holdings import monitor as mon_mod
+    from alpha_holdings import themes as theme_mod
 
-    backend = build_storage_backend(
-        backend=config.STORAGE_BACKEND,
-        root_path=config.DATA_STORAGE_PATH,
-        database_path=_database_path_from_url(config.DATABASE_URL),
-        azure_account_url=config.AZURE_STORAGE_ACCOUNT_URL,
-        azure_container=config.AZURE_STORAGE_CONTAINER,
-        azure_prefix=config.AZURE_STORAGE_PREFIX,
-    )
+    themes = theme_mod.load_latest_themes()
+    if not themes:
+        console.print("[yellow]No saved themes found. Run 'discover' first.[/yellow]")
+        return
 
-    try:
-        result = construct_portfolio(
-            storage=backend,
-            as_of=date,
-            seed_universe_path=config.UNIVERSE_SEED_PATH,
+    console.rule("[bold]Opportunity Scan[/bold]")
+    opps = mon_mod.scan_opportunities(themes)
+    _print_opportunities(opps)
+    console.print()
+    console.print(DISCLAIMER)
+
+
+@cli.command()
+@click.argument("what", type=click.Choice(["themes", "allocation"]))
+def show(what: str) -> None:
+    """Display saved themes or allocation data."""
+    if what == "themes":
+        from alpha_holdings import themes as theme_mod
+
+        themes = theme_mod.load_latest_themes()
+        if themes:
+            _print_themes(themes)
+        else:
+            console.print("[yellow]No saved themes.[/yellow]")
+    elif what == "allocation":
+        path = Path("data/allocations")
+        if path.exists():
+            files = sorted(path.glob("*.json"), reverse=True)
+            if files:
+                data = json.loads(files[0].read_text())
+                console.print_json(json.dumps(data, indent=2))
+            else:
+                console.print("[yellow]No saved allocations.[/yellow]")
+        else:
+            console.print("[yellow]No saved allocations.[/yellow]")
+    console.print()
+    console.print(DISCLAIMER)
+
+
+# ---------------------------------------------------------------------------
+# Display helpers
+# ---------------------------------------------------------------------------
+
+
+def _print_regime(regime) -> None:
+    badge = REGIME_BADGE.get(regime.regime, str(regime.regime.value))
+    console.print(Panel(
+        f"Macro Regime: {badge} (confidence: {regime.confidence}/10)\n"
+        + "\n".join(f"  • {d}" for d in regime.drivers),
+        title="Macro Environment",
+    ))
+
+
+def _print_signals(signals) -> None:
+    if not signals:
+        console.print("[yellow]No signals collected.[/yellow]")
+        return
+    table = Table(title="Macro Signals", show_lines=True)
+    table.add_column("Tags", style="cyan", max_width=20)
+    table.add_column("Headline", style="bold")
+    table.add_column("Summary", max_width=60)
+    for s in signals[:15]:
+        tags = ", ".join(s.tags[:3]) if s.tags else ""
+        table.add_row(tags, s.headline, s.summary)
+    console.print(table)
+
+
+def _print_themes(themes) -> None:
+    table = Table(title="Discovered Themes", show_lines=True)
+    table.add_column("Theme", style="bold cyan")
+    table.add_column("Confidence", justify="center")
+    table.add_column("Why Now", max_width=50)
+    table.add_column("Companies", justify="center")
+    for t in themes:
+        conf_color = "green" if t.confidence_score >= 7 else "yellow" if t.confidence_score >= 5 else "red"
+        table.add_row(
+            t.name,
+            f"[{conf_color}]{t.confidence_score}/10[/{conf_color}]",
+            t.why_now[:100] + "..." if len(t.why_now) > 100 else t.why_now,
+            str(len(t.all_companies)),
         )
-    except ValueError as exc:
-        typer.secho(str(exc), fg=typer.colors.RED, err=True)
-        raise typer.Exit(1) from exc
+    console.print(table)
 
-    typer.echo(f"Constructed portfolio '{result.portfolio_id}' as of {result.as_of}")
-    typer.echo(f"  Holdings:     {result.holdings_count}")
-    typer.echo(f"  Total weight: {result.total_weight}")
-    typer.echo(f"  Max weight:   {result.max_weight}")
-    if result.turnover_vs_prior is not None:
-        typer.echo(f"  Turnover:     {result.turnover_vs_prior:.2%}")
-    typer.echo(f"  Snapshot:     {result.snapshot_path}")
-    if result.warnings:
-        typer.echo("")
-        for w in result.warnings:
-            typer.secho(f"  ⚠ {w}", fg=typer.colors.YELLOW)
-    typer.echo("")
-    typer.echo(
-        result.weights[["symbol", "target_weight", "composite_score", "rank", "country"]].to_string(
-            index=False
+
+def _print_dependencies(deps) -> None:
+    table = Table(title="Theme Dependencies", show_lines=True)
+    table.add_column("Source", style="bold")
+    table.add_column("→", justify="center")
+    table.add_column("Target", style="bold")
+    table.add_column("Relationship")
+    for d in deps:
+        table.add_row(d.source_theme, "→", d.target_theme, d.explanation)
+    console.print(table)
+
+
+def _print_supply_chain_tree(theme, scores, fund_data, etf_rec) -> None:
+    score_map = {s.ticker: s for s in scores}
+    tree = Tree(f"[bold cyan]{theme.name}[/bold cyan] [dim](confidence: {theme.confidence_score}/10)[/dim]")
+
+    for tier_label, tier_enum, style in [
+        ("Tier 1 — Demand Drivers (typically priced in)", SupplyChainTier.TIER_1_DEMAND_DRIVER, "dim"),
+        ("Tier 2 — Direct Enablers (partially priced)", SupplyChainTier.TIER_2_DIRECT_ENABLER, "yellow"),
+        ("Tier 3 — Picks & Shovels (pricing gap) 🟢", SupplyChainTier.TIER_3_PICKS_AND_SHOVELS, "bold green"),
+    ]:
+        companies = [c for c in theme.all_companies if c.supply_chain_tier == tier_enum]
+        if not companies:
+            continue
+        tier_branch = tree.add(f"[{style}]{tier_label}[/{style}]")
+        for c in companies:
+            sc = score_map.get(c.full_ticker)
+            f = fund_data.get(c.full_ticker)
+            pe_str = f"({f.forward_pe:.0f}x fwd P/E)" if f and f.forward_pe else ""
+            score_str = f"[score: {sc.composite_score:.0f}]" if sc else ""
+            entry_str = ""
+            if sc and sc.entry_method == EntryMethod.LUMP_SUM:
+                entry_str = " 🟢 lump sum"
+            elif sc and sc.entry_method == EntryMethod.DCA:
+                entry_str = " ⚡ DCA"
+            elif sc and sc.entry_method == EntryMethod.WAIT:
+                entry_str = " 🔴 wait"
+            tier_branch.add(f"[{style}]{c.full_ticker}[/{style}] {c.name} {pe_str} {score_str}{entry_str}")
+
+    if etf_rec and etf_rec.etf_ticker:
+        tree.add(f"[blue]ETF: {etf_rec.etf_ticker} — {etf_rec.reasoning}[/blue]")
+
+    console.print(tree)
+    console.print()
+
+
+def _print_allocation(allocation) -> None:
+    table = Table(title="Model Portfolio Allocation", show_lines=True)
+    table.add_column("Theme", style="bold")
+    table.add_column("Vehicle", style="cyan")
+    table.add_column("Allocation %", justify="right")
+    table.add_column("Entry", justify="center")
+    table.add_column("Rationale", max_width=50)
+
+    for e in allocation.entries:
+        entry_style = {
+            EntryMethod.LUMP_SUM: "[green]Lump Sum[/green]",
+            EntryMethod.DCA: "[yellow]DCA[/yellow]",
+            EntryMethod.WAIT: "[red]Wait[/red]",
+        }
+        table.add_row(
+            e.theme,
+            e.vehicle,
+            f"{e.pct_allocation:.1f}%",
+            entry_style.get(e.entry_method, str(e.entry_method.value)),
+            e.rationale,
         )
+
+    table.add_row(
+        "[dim]Broad Market Core[/dim]",
+        "VT / VOO",
+        f"{allocation.core_pct:.1f}%",
+        "[yellow]DCA[/yellow]",
+        "Stability + diversification",
+        style="dim",
     )
-
-    manifest_path = _write_run_manifest(
-        storage=backend,
-        workflow="construct",
-        inputs={"as_of": date, "seed_universe_path": str(config.UNIVERSE_SEED_PATH)},
-        outputs={
-            "portfolio_id": result.portfolio_id,
-            "holdings_count": result.holdings_count,
-            "snapshot_path": str(result.snapshot_path),
-        },
-        warnings=result.warnings,
-    )
-    typer.echo(f"Manifest written: {manifest_path}")
-
-
-@app.command()
-def rebalance(
-    date: str = typer.Option(..., help="Rebalance as-of date (YYYY-MM-DD)"),
-    portfolio_value: float = typer.Option(
-        1_000_000.0, help="Total portfolio value for share calculation"
-    ),
-):
-    """Generate trade proposals vs. current holdings."""
-    from alpha_holdings import config
-    from alpha_holdings.data.storage import build_storage_backend
-    from alpha_holdings.portfolio import rebalance_portfolio
-
-    backend = build_storage_backend(
-        backend=config.STORAGE_BACKEND,
-        root_path=config.DATA_STORAGE_PATH,
-        database_path=_database_path_from_url(config.DATABASE_URL),
-        azure_account_url=config.AZURE_STORAGE_ACCOUNT_URL,
-        azure_container=config.AZURE_STORAGE_CONTAINER,
-        azure_prefix=config.AZURE_STORAGE_PREFIX,
-    )
-
-    try:
-        result = rebalance_portfolio(
-            storage=backend,
-            as_of=date,
-            portfolio_value=portfolio_value,
-            seed_universe_path=config.UNIVERSE_SEED_PATH,
+    if allocation.defensive_pct > 0:
+        table.add_row(
+            "[dim]Defensive[/dim]",
+            "BND / TLT / GLD",
+            f"{allocation.defensive_pct:.1f}%",
+            "[yellow]DCA[/yellow]",
+            "Bear regime defensive allocation",
+            style="dim",
         )
-    except ValueError as exc:
-        typer.secho(str(exc), fg=typer.colors.RED, err=True)
-        raise typer.Exit(1) from exc
 
-    typer.echo(f"Rebalance for '{result.portfolio_id}' as of {result.as_of}")
-    typer.echo(f"  Portfolio value: ${result.portfolio_value:,.2f}")
-    typer.echo(f"  Trades:     {result.trades_count} ({result.buys} buys, {result.sells} sells)")
-    typer.echo(f"  Turnover:   {result.estimated_turnover:.2%}")
-    typer.echo(f"  Snapshot:   {result.snapshot_path}")
-    if not result.proposals.empty:
-        typer.echo("")
-        display_cols = [
-            "symbol",
-            "side",
-            "shares",
-            "price_estimate",
-            "estimated_value",
-            "weight_change",
-        ]
-        typer.echo(result.proposals[display_cols].to_string(index=False))
-
-    manifest_path = _write_run_manifest(
-        storage=backend,
-        workflow="rebalance",
-        inputs={
-            "as_of": date,
-            "portfolio_value": portfolio_value,
-            "seed_universe_path": str(config.UNIVERSE_SEED_PATH),
-        },
-        outputs={
-            "portfolio_id": result.portfolio_id,
-            "trades_count": result.trades_count,
-            "snapshot_path": str(result.snapshot_path),
-            "holdings_snapshot_path": (
-                str(result.holdings_snapshot_path) if result.holdings_snapshot_path else None
-            ),
-        },
-    )
-    typer.echo(f"Manifest written: {manifest_path}")
+    console.print(table)
 
 
-@app.command()
-def backtest(
-    start_date: str = typer.Option(..., help="Backtest start (YYYY-MM-DD)"),
-    end_date: str = typer.Option(..., help="Backtest end (YYYY-MM-DD)"),
-    rebalance_freq: str = typer.Option(
-        "monthly", help="Rebalance frequency (weekly, monthly, quarterly)"
-    ),
-    benchmark: str = typer.Option("SPY", help="Benchmark symbol"),
-):
-    """Run historical walk-forward backtest."""
-    from alpha_holdings import config
-    from alpha_holdings.backtest import run_backtest
-    from alpha_holdings.data.storage import build_storage_backend
+def _print_rebalance_signals(signals) -> None:
+    console.rule("[bold]Rebalancing Signals[/bold]")
+    for s in signals:
+        urgency_style = {
+            Urgency.HIGH: "[bold red]🔴 HIGH[/bold red]",
+            Urgency.MEDIUM: "[yellow]🟡 MED[/yellow]",
+            Urgency.LOW: "[green]🟢 LOW[/green]",
+        }
+        badge = urgency_style.get(s.urgency, str(s.urgency.value))
+        action_str = s.action.value.replace("_", " ").upper()
+        console.print(f"  {badge} {action_str}: {s.reason}")
+        if s.from_asset:
+            console.print(f"    From: {s.from_asset}")
+        if s.to_asset:
+            console.print(f"    To: {s.to_asset}")
 
-    backend = build_storage_backend(
-        backend=config.STORAGE_BACKEND,
-        root_path=config.DATA_STORAGE_PATH,
-        database_path=_database_path_from_url(config.DATABASE_URL),
-        azure_account_url=config.AZURE_STORAGE_ACCOUNT_URL,
-        azure_container=config.AZURE_STORAGE_CONTAINER,
-        azure_prefix=config.AZURE_STORAGE_PREFIX,
-    )
 
-    try:
-        result = run_backtest(
-            storage=backend,
-            start_date=start_date,
-            end_date=end_date,
-            rebalance_freq=rebalance_freq,
-            seed_universe_path=config.UNIVERSE_SEED_PATH,
-            benchmark_symbol=benchmark,
-            lookback_days=config.SCORE_LOOKBACK_DAYS,
+def _print_opportunities(opps) -> None:
+    if not opps:
+        console.print("[dim]No dip opportunities detected.[/dim]")
+        return
+    table = Table(title="Dip Opportunities", show_lines=True)
+    table.add_column("Ticker", style="bold")
+    table.add_column("Signal", justify="center")
+    table.add_column("Drawdown", justify="right")
+    table.add_column("Thesis", justify="center")
+    table.add_column("Action", max_width=60)
+    for o in opps:
+        signal_style = {
+            OpportunityType.BUY_THE_DIP: "[bold green]BUY DIP[/bold green]",
+            OpportunityType.CAUTION: "[yellow]CAUTION[/yellow]",
+            OpportunityType.AVOID: "[red]AVOID[/red]",
+        }
+        table.add_row(
+            o.ticker,
+            signal_style.get(o.signal_type, str(o.signal_type.value)),
+            f"{o.drawdown_pct:.1f}%" if o.drawdown_pct else "N/A",
+            f"{o.thesis_confidence}/10",
+            o.recommended_action,
         )
-    except ValueError as exc:
-        typer.secho(str(exc), fg=typer.colors.RED, err=True)
-        raise typer.Exit(1) from exc
-
-    typer.echo(f"Backtest: {result.start_date} → {result.end_date}")
-    typer.echo(f"  Rebalances:       {result.rebalance_count}")
-    typer.echo(f"  Total Return:     {result.total_return:.4%}")
-    typer.echo(f"  Annualized:       {result.annualized_return:.4%}")
-    typer.echo(f"  Volatility:       {result.volatility:.4%}")
-    typer.echo(f"  Sharpe Ratio:     {result.sharpe_ratio:.4f}")
-    typer.echo(f"  Max Drawdown:     {result.max_drawdown:.4%}")
-    if result.benchmark_total_return is not None:
-        typer.echo(f"  Benchmark Return: {result.benchmark_total_return:.4%}")
-    typer.echo(f"  Snapshot:         {result.snapshot_path}")
-    if result.warnings:
-        typer.echo("")
-        for w in result.warnings:
-            typer.secho(f"  ⚠ {w}", fg=typer.colors.YELLOW)
-
-    manifest_path = _write_run_manifest(
-        storage=backend,
-        workflow="backtest",
-        inputs={
-            "start_date": start_date,
-            "end_date": end_date,
-            "rebalance_freq": rebalance_freq,
-            "benchmark": benchmark,
-            "lookback_days": config.SCORE_LOOKBACK_DAYS,
-            "seed_universe_path": str(config.UNIVERSE_SEED_PATH),
-        },
-        outputs={
-            "rebalance_count": result.rebalance_count,
-            "total_return": result.total_return,
-            "snapshot_path": str(result.snapshot_path),
-        },
-        warnings=result.warnings,
-    )
-    typer.echo(f"  Manifest:         {manifest_path}")
+    console.print(table)
 
 
-@app.command()
-def report(
-    benchmark: str = typer.Option("SPY", help="Benchmark symbol"),
-    risk_free_rate: float = typer.Option(0.04, help="Annual risk-free rate"),
-    html: str | None = typer.Option(None, help="Output HTML report to this file path"),
-):
-    """Generate performance report from latest backtest results."""
-    from alpha_holdings import config
-    from alpha_holdings.analytics import generate_report
-    from alpha_holdings.data.storage import build_storage_backend
+def _save_allocation(allocation) -> None:
+    from datetime import datetime
 
-    backend = build_storage_backend(
-        backend=config.STORAGE_BACKEND,
-        root_path=config.DATA_STORAGE_PATH,
-        database_path=_database_path_from_url(config.DATABASE_URL),
-        azure_account_url=config.AZURE_STORAGE_ACCOUNT_URL,
-        azure_container=config.AZURE_STORAGE_CONTAINER,
-        azure_prefix=config.AZURE_STORAGE_PREFIX,
-    )
-
-    try:
-        rpt = generate_report(
-            storage=backend,
-            risk_free_rate=risk_free_rate,
-            benchmark_symbol=benchmark,
-        )
-    except ValueError as exc:
-        typer.secho(str(exc), fg=typer.colors.RED, err=True)
-        raise typer.Exit(1) from exc
-
-    typer.echo(f"Performance Report: {rpt.start_date} → {rpt.end_date}")
-    typer.echo(f"  Portfolio: {rpt.portfolio_id}")
-    typer.echo(f"  Snapshot:  {rpt.snapshot_path}")
-    typer.echo("")
-    typer.echo(rpt.summary.to_string(index=False))
-    if rpt.degraded_assumptions:
-        typer.echo("")
-        for warning in rpt.degraded_assumptions:
-            typer.secho(f"  ⚠ {warning}", fg=typer.colors.YELLOW)
-
-    # Factor attribution
-    attribution = None
-    try:
-        from alpha_holdings.analytics import compute_factor_attribution
-
-        attribution = compute_factor_attribution(
-            storage=backend,
-            start_date=rpt.start_date,
-            end_date=rpt.end_date,
-            seed_universe_path=config.UNIVERSE_SEED_PATH,
-            risk_free_rate=risk_free_rate,
-        )
-        typer.echo("")
-        typer.echo("Factor Attribution:")
-        typer.echo(f"  Alpha (ann.):        {attribution.alpha_ann:.2%}")
-        typer.echo(f"  R²:                  {attribution.r_squared:.4f}")
-        typer.echo(f"  Residual Vol (ann.): {attribution.residual_vol_ann:.2%}")
-        for f in attribution.factors:
-            typer.echo(
-                f"  {f.name:<20s} β={f.beta:+.4f}  contrib={f.contribution_ann:+.2%}  t={f.t_stat:.2f}"
-            )
-    except (ValueError, Exception) as exc:
-        typer.secho(f"  Attribution skipped: {exc}", fg=typer.colors.YELLOW, err=True)
-
-    # HTML report
-    if html:
-        from alpha_holdings.analytics import render_html_report
-        from alpha_holdings.analytics.performance import _read_latest_backtest
-
-        nav_df = _read_latest_backtest(storage=backend)
-        html_path = render_html_report(
-            report=rpt,
-            nav_series=nav_df if nav_df is not None else pd.DataFrame(),
-            attribution=attribution,
-            output_path=Path(html),
-        )
-        typer.echo(f"\nHTML report written: {html_path}")
-
-    manifest_path = _write_run_manifest(
-        storage=backend,
-        workflow="report",
-        inputs={
-            "benchmark": benchmark,
-            "risk_free_rate": risk_free_rate,
-            "html": html,
-        },
-        outputs={
-            "portfolio_id": rpt.portfolio_id,
-            "snapshot_path": str(rpt.snapshot_path),
-            "html_path": str(html_path) if html else None,
-        },
-        warnings=rpt.degraded_assumptions,
-    )
-    typer.echo(f"Manifest written: {manifest_path}")
-
-
-def _parse_date_or_default(value: str | None, *, default: date) -> date:
-    if not value:
-        return default
-    return date.fromisoformat(value)
-
-
-def _database_path_from_url(database_url: str) -> Path:
-    prefix = "duckdb:///"
-    if database_url.startswith(prefix):
-        return Path(database_url[len(prefix) :])
-    return Path(database_url)
-
-
-def _write_run_manifest(
-    *,
-    storage,
-    workflow: str,
-    inputs: dict[str, object],
-    outputs: dict[str, object],
-    warnings: list[str] | None = None,
-) -> Path:
-    """Persist a machine-readable workflow execution manifest."""
-    run_as_of = datetime.now(tz=UTC)
-    warning_list = list(warnings or [])
-    row = {
-        "run_id": run_as_of.isoformat(),
-        "workflow": workflow,
-        "status": "success",
-        "inputs_json": json.dumps(inputs, sort_keys=True, default=str),
-        "outputs_json": json.dumps(outputs, sort_keys=True, default=str),
-        "warnings_json": json.dumps(warning_list, sort_keys=True, default=str),
-    }
-
-    path = storage.write_normalized_snapshot(
-        dataset="run_manifests",
-        as_of=run_as_of,
-        rows=[row],
-    )
-    storage.register_snapshot(
-        dataset="run_manifests",
-        as_of=run_as_of,
-        snapshot_path=path,
-        row_count=1,
-        metadata={
-            "workflow": workflow,
-            "status": "success",
-            "warnings_count": len(warning_list),
-            "outputs": outputs,
-        },
-    )
-    return path
+    path = Path("data/allocations")
+    path.mkdir(parents=True, exist_ok=True)
+    f = path / f"{datetime.utcnow().strftime('%Y%m%d')}_allocation.json"
+    f.write_text(allocation.model_dump_json(indent=2))
 
 
 if __name__ == "__main__":
-    app()
+    cli()

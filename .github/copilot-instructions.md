@@ -1,66 +1,36 @@
-# Copilot Instructions for alpha-holdings
+# Alpha Holdings — Copilot Instructions
 
-## Orientation
+## Project
+Autonomous thematic investment research CLI tool. Discovers bullish investment themes from global macro signals, maps supply chains (Tier 1/2/3), scores companies on fundamentals + thesis alignment + pricing gap, and produces model portfolio allocations.
 
-- Read `PLAN.md` first for architecture, decisions, phase scope, and step checklists.
-- Read `STATUS.md` second for current execution state, upcoming work, blockers, and known limitations.
-- These two files together give full project context. Do not rely on repo memory files or session memory for project state.
+## Constraints
+- **Azure & Microsoft Foundry only** — all AI services via Azure OpenAI / Microsoft Foundry. No direct OpenAI API, no local models, no non-Azure services.
+- **Entra ID authentication** — use `DefaultAzureCredential` + `get_bearer_token_provider`. No API keys for Azure OpenAI.
+- **Responses API** — use `client.responses.create()` with `web_search` tool, not Chat Completions API.
+- **Global scope** — US, European, Asian, Australian markets. Not US-only.
 
-## File maintenance conventions
+## Stack
+- Python 3.11+, CLI via click + rich
+- Azure OpenAI gpt-5.4 (primary) + gpt-5.4-mini (lightweight tasks)
+- yfinance for global market data
+- Pydantic for data models, pandas for tabular analysis
 
-### STATUS.md (execution snapshot — keep lean)
+## Architecture
+- CLI-first (`src/alpha_holdings/cli.py`), notebooks optional for visualization only
+- All business logic in importable modules under `src/alpha_holdings/`
+- Prompt templates in `src/alpha_holdings/prompts/` — separated from logic
+- Data persisted to `data/` (themes, allocations, cache) — gitignored
 
-- **Trim, don't tick.** When a task is completed, remove it from the checklist rather than marking it `[x]`. The file should only contain open work.
-- Sections: `Now` (≤5 lines of current state), `Upcoming Work` (phase-grouped `- [ ]` checklists for next 1–2 phases), `Blocked`, `Known Limitations`, `Test Commands`.
-- No "Done" section. Git history and PLAN.md progress notes are the record of completed work.
+## Key Principles
+- "Sell shovels" — prioritize Tier 2-3 supply chain companies with unrecognized theme exposure
+- Thesis horizon always 3-5 years
+- Graceful degradation — handle API failures, missing data, hallucinated tickers without crashing
+- Every output includes "NOT FINANCIAL ADVICE" disclaimer
 
-### PLAN.md (long-lived roadmap — keep stable)
+## Web Search
+- Always search the web for topics that may be more recent than training data: model releases, market data, API changes, current events, pricing.
 
-- **Phase Completion Snapshot** uses `[x]`/`[ ]` checkboxes per phase.
-- **Steps** use `[x]`/`[ ]` checkboxes per step.
-- **Progress notes** exist only for the currently active phase(s). When a phase completes: tick its `[x]` checkbox, delete its progress notes block, and remove its checklist from STATUS.md.
-- The Decisions, Verification, and Further Considerations sections are append-only reference — do not trim them.
-
-### General rules
-
-- Do not accumulate historical completion logs in either file.
-- When starting a new session, update `STATUS.md → Now` to reflect the current state before beginning work.
-- When finishing a session, ensure STATUS.md reflects what's next and any new blockers.
-
-## Git workflow
-
-- After each completed task or logical unit of work, commit changes with a concise message referencing the PLAN step number.
-- Example commit: `feat: phase-7-step-15 implement fundamentals-aware backtest scoring`
-- Commits create natural boundaries in history and enable clear session handoffs — if a session ends with a clean commit, the next session knows exactly where work left off.
-- Before committing: ensure `uv run pytest -q` passes and `uv run ruff check . && uv run ruff format --check .` passes.
-- Git history is the audit trail; PLAN.md and STATUS.md are the current roadmap.
-
-## Code conventions
-
-- Python 3.12, managed with `uv`.
-- Domain models use Pydantic v2.
-- CLI uses Typer.
-- Tests: unit/function tests in `tests/test_*.py`, BDD scenarios in `tests/bdd/`.
-- Run all tests: `uv run pytest -q`.
-- Lint/format: `uv run ruff check . && uv run ruff format --check .`
-
-## Development principles
-
-### TDD (Red → Green → Refactor)
-
-- **Write a failing test first.** No production code without a corresponding red test.
-- Get the test green with the simplest possible implementation — do not gold-plate on the first pass.
-- Refactor only after green. Each refactor must keep the suite green.
-- Run the full test suite (`uv run pytest -q`) after every change; never leave it red.
-
-### YAGNI (You Aren't Gonna Need It)
-
-- Only build what the current task requires — no speculative features, abstractions, or "just in case" code.
-- Do not add parameters, config knobs, or extension points for hypothetical future needs.
-- If a need isn't proven by a test or a current requirement, it doesn't belong in the codebase yet.
-
-### DRY (Don't Repeat Yourself)
-
-- Extract shared logic into a helper only when the same code appears in two or more places — not before.
-- Prefer small, focused functions over monoliths, but do not create abstractions for one-time operations.
-- Test helpers and fixtures in `conftest.py` count — deduplicate test setup the same way you deduplicate production code.
+## Documentation
+After any code change that adds, modifies, or removes a feature, flag, or behavior:
+update the relevant documentation (README.md, script docstrings, CLI --help text, .env.example).
+Never leave code and docs out of sync. The end user relies on docs to discover and use all options.

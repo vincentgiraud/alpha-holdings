@@ -1,210 +1,224 @@
-# Alpha Holdings: Free-Data Upgradeable Strategy Engine
+# Alpha Holdings
 
-A Python-first research platform for portfolio construction, rebalancing, backtesting, and performance analytics. Bootstraps on free data sources (Yahoo Finance, SEC EDGAR, Stooq) with a clean provider abstraction that allows seamless upgrade to paid vendors (Bloomberg, FactSet, LSEG) without rewriting portfolio logic.
+Autonomous thematic investment research CLI tool. Discovers bullish investment themes from global macro signals, maps supply chains (Tier 1/2/3), scores companies on fundamentals + thesis alignment + pricing gap, and produces model portfolio allocations.
 
-## Implementation Status
+**Core philosophy: "During a gold rush, sell shovels."** The system prioritizes Tier 2-3 supply chain companies with unrecognized theme exposure over expensive Tier 1 demand drivers.
 
-**All six phases complete.** The platform delivers an end-to-end research loop:
-
-- Domain contracts, investor profiles, and asset allocation
-- Provider abstraction with free adapters (Yahoo, Stooq, EDGAR) and a reserved paid-provider namespace
-- Constrained universe with liquidity filtering and benchmark proxy assignments
-- Transparent equity scoring with price-derived and fundamentals-backed factors
-- Benchmark-aware portfolio construction with position caps, country deviation bands, turnover limits, and minimum holdings
-- Rebalance engine generating trade proposals with share counts and book-cost tracking
-- Walk-forward backtesting with daily NAV, weight drift, and configurable rebalance frequency
-- Performance reporting (total/annualized return, volatility, Sharpe, max drawdown, Calmar, information ratio)
-- Factor attribution via returns-based style analysis (momentum, low-volatility, liquidity)
-- Self-contained HTML reports with inline SVG charts (NAV, drawdown, attribution bars, weight history)
-- 290 tests (unit, BDD scenarios, and upgrade-path validation), lint and format clean
+> **NOT FINANCIAL ADVICE** — this is an AI-assisted research tool. Verify all data before making investment decisions.
 
 ## Quick Start
 
-### Prerequisites
-- Python 3.12+
-- [uv](https://docs.astral.sh/uv/) (fast Python package installer and resolver)
-
-### Installation
-
 ```bash
-git clone <repo-url>
-cd alpha-holdings
-uv sync --extra dev
+# 1. Clone and install
+git clone <repo-url> && cd alpha-holdings
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+
+# 2. Configure
+cp .env.example .env
+# Edit .env with your Azure OpenAI endpoint (Entra ID auth — no API key needed)
+
+# 3. Login to Azure (for Entra ID authentication)
+az login
+
+# 4. Run discovery
+alpha-holdings discover --risk moderate --horizon 3-5yr
 ```
 
-### Verify installation
+## Prerequisites
+
+- **Python 3.11+**
+- **Azure CLI** — `az login` for Entra ID authentication
+- **Azure OpenAI** — gpt-5.4 and gpt-5.4-mini deployed on Microsoft Foundry
+  - Uses the Responses API with `web_search` tool for real-time grounding
+  - No API key needed — authenticates via `DefaultAzureCredential`
+
+## Environment Variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `AZURE_OPENAI_BASE_URL` | Yes | Foundry endpoint URL (e.g., `https://<name>.services.ai.azure.com/api/projects/<project>/openai/v1/`) |
+| `AZURE_OPENAI_MODEL` | Yes | Primary model deployment name (e.g., `gpt-5.4-1`) |
+| `AZURE_OPENAI_MODEL_MINI` | Yes | Lightweight model deployment name (e.g., `gpt-5.4-mini-1`) |
+
+See [.env.example](.env.example) for the template.
+
+## CLI Commands
+
+### `alpha-holdings discover`
+
+Full pipeline: macro signals → themes → fundamentals → scoring → ETF mapping → allocation.
 
 ```bash
-uv run pytest -q
+alpha-holdings discover --risk moderate --horizon 3-5yr
+alpha-holdings discover --risk aggressive --horizon 3-5yr
+alpha-holdings discover --risk conservative --horizon 10yr+ --focus "energy infrastructure"
 ```
 
-## CLI Workflows
+**Options:**
+- `--risk` — `conservative` / `moderate` / `aggressive`. Controls thematic vs core allocation split, max concentration per theme, and vehicle preference (ETF vs stocks).
+- `--horizon` — `3-5yr` / `5-10yr` / `10yr+`. Longer horizons allocate less to thematic bets.
+- `--focus` — Optional focus areas to bias theme discovery (repeatable). The system discovers themes autonomously; this biases but doesn't limit.
 
-All commands are invoked via `uv run alpha <command>`.
+### `alpha-holdings monitor`
 
-### Configuration check
+Re-evaluate saved themes against fresh macro signals. Generates rebalancing signals and scans for dip opportunities.
+
 ```bash
-uv run alpha check
+alpha-holdings monitor
+alpha-holdings monitor --theme "AI Power Stack"
 ```
 
-### Refresh data
-```bash
-uv run alpha refresh --universe tests/fixtures/seed_universe.csv
-```
-Fetches price history and fundamentals for the seed universe, writing raw payloads and normalized parquet snapshots to local storage.
+### `alpha-holdings opportunities`
 
-### Inspect snapshots
+Quick scan across all funded themes for buy-the-dip opportunities.
+
 ```bash
-uv run alpha list-snapshots
-uv run alpha show-snapshot --dataset aapl_prices --as-of 2026-03-28
+alpha-holdings opportunities
 ```
 
-### Score equities
-```bash
-uv run alpha score --date 2026-03-28
-```
-Computes factor scores (momentum, low-volatility, liquidity, profitability, balance-sheet quality, cash-flow quality) and persists an `equity_scores` snapshot.
+### `alpha-holdings show`
 
-### Construct portfolio
-```bash
-uv run alpha construct --date 2026-03-28
-```
-Reads the latest equity scores, applies portfolio constraints from the investor profile, and produces target weights.
+Display saved data from previous runs.
 
-### Rebalance
 ```bash
-uv run alpha rebalance --date 2026-03-28
+alpha-holdings show themes
+alpha-holdings show allocation
 ```
-Compares target weights against prior holdings, generates trade proposals with share counts and values, and persists a holdings snapshot with book-cost tracking.
 
-### Backtest
-```bash
-uv run alpha backtest --start-date 2024-01-01 --end-date 2026-03-28
-```
-Walk-forward simulation with in-memory scoring at each rebalance date, daily NAV tracking, and benchmark comparison.
+### Global Options
 
-### Report
 ```bash
-uv run alpha report --date 2026-03-28
-uv run alpha report --date 2026-03-28 --html report.html
+alpha-holdings -v discover ...   # Verbose/debug logging
 ```
-Computes performance metrics, factor attribution, and optionally generates a self-contained HTML report with inline SVG charts.
 
 ## Architecture
 
 ```
-src/alpha_holdings/
-├── domain/                   # Data contracts and business models
-│   ├── models.py            # Security, PriceBar, FundamentalSnapshot, Holding, TargetWeight, etc.
-│   └── investor_profile.py  # InvestorProfile, FireVariant, PortfolioConstraints
-├── data/
-│   ├── providers/
-│   │   ├── base.py          # ABCs: PriceProvider, FundamentalsProvider, ReferenceDataProvider, FXProvider, BenchmarkProvider
-│   │   ├── free/            # Yahoo Finance, Stooq, SEC EDGAR
-│   │   └── paid/            # Reserved namespace for Bloomberg, FactSet, LSEG
-│   ├── normalization.py     # Source-to-canonical transformations
-│   ├── refresh.py           # Fetch → normalize → persist orchestration
-│   └── storage.py           # LocalStorageBackend (parquet + DuckDB); StorageBackend protocol
-├── universe/
-│   └── builder.py           # Liquidity-filtered universe from price snapshots
-├── scoring/
-│   └── fundamental_model.py # 6-factor composite score with z-score normalization
-├── portfolio/
-│   ├── asset_allocation.py  # Profile → equity/bond/crypto sleeve weights
-│   ├── construction.py      # Score-proportional weights with constraint enforcement
-│   ├── rebalance.py         # Trade proposal generation and book-cost tracking
-│   └── state.py             # Holdings snapshot persistence
-├── backtest/
-│   └── runner.py            # Walk-forward simulation engine
-├── analytics/
-│   ├── performance.py       # Return, risk, and benchmark-relative metrics
-│   ├── attribution.py       # Returns-based factor attribution (OLS regression)
-│   ├── goal.py              # Wealth probability, safe withdrawal rate
-│   └── html_report.py       # Self-contained HTML with inline SVG charts
-├── cli.py                   # Typer CLI entry points
-└── config.py                # Environment-driven configuration
+CLI (click + rich)
+  → Signal Collector (Responses API + web_search tool)
+    → Macro regime assessment (bull/neutral/bear)
+  → Theme Discovery (gpt-5.4 with web search, tiered supply chain mapping)
+    → Theme dependency mapping (cross-theme causal chains)
+  → Fundamentals Fetcher (yfinance, global exchanges)
+  → Scoring Engine (40% fundamental + 30% thesis alignment + 30% pricing gap)
+  → ETF Mapping (thematic ETF identification + overlap analysis)
+  → Allocation Engine (conviction-weighted, regime-adjusted, overlap-aware)
+  → Rich terminal output (supply chain trees, allocation tables, dip alerts)
 ```
 
-## Multi-Asset Architecture
+### Modules
 
-- **Two-tier construction:** `AssetAllocator` derives sleeve weights (equity, bond, crypto) from `InvestorProfile`; per-sleeve security selection runs independently.
-- **Bonds:** Always included as a sleeve. Weight floor rises as horizon shrinks and risk appetite decreases. Bond ETF proxies sourced via Yahoo Finance.
-- **Crypto:** Opt-in satellite sleeve, enabled only when `crypto_enabled=true` and `risk_appetite >= 4`. Represented by a capped broad crypto ETF proxy, never individual coins. Max 5% (risk 4) or 10% (risk 5).
+| Module | Purpose |
+|---|---|
+| `cli.py` | Click CLI + rich terminal output |
+| `llm.py` | Azure OpenAI client, Responses API, Entra ID auth |
+| `models.py` | All Pydantic data models |
+| `config.py` | Risk matrix, scoring weights, regime gates |
+| `signals.py` | Macro signal collection via agentic web search |
+| `themes.py` | Autonomous theme discovery + ticker validation |
+| `fundamentals.py` | yfinance global market data + file cache |
+| `scoring.py` | Composite scoring + dip opportunity detection |
+| `etfs.py` | Thematic ETF identification + overlap analysis |
+| `allocation.py` | Conviction-weighted portfolio allocation |
+| `monitor.py` | Course correction + rebalancing signals |
+| `prompts/` | Versioned prompt templates (separated from logic) |
 
-## Free-Data Limitations
+### Data
 
-1. **No point-in-time fundamentals:** SEC EDGAR filings may include restated figures. The `data_flags` field marks this explicitly (`no_point_in_time`).
-2. **Adjusted prices:** Yahoo provides adjusted data; Stooq provides unadjusted only. The `data_flags` field tracks which adjustment mode was applied.
-3. **Identifier drift:** Ticker symbols change across exchanges and time. External match-on-name risk exists until identifier maps are comprehensively curated.
-4. **Benchmark coverage:** Public ETF proxies are used rather than licensed index constituent history.
-5. **Survivorship bias:** Historical downloads may miss delisted securities without explicit curation.
-6. **Global coverage:** EDGAR fundamentals are US-centric. Mixed universes rely on graceful degradation for ex-US symbols without fundamental snapshots.
+All data persisted to `data/` (gitignored):
+- `data/themes/` — discovered themes (JSON, dated)
+- `data/allocations/` — allocation snapshots for drift tracking
+- `data/cache/` — fundamentals cache (24h TTL)
 
-## Upgrade Path: Adding a Paid Data Provider
+## Scoring
 
-The provider abstraction is the key upgrade seam. To add a paid vendor (e.g., Bloomberg):
+Each company is scored on three dimensions:
 
-1. **Create the adapter:** `src/alpha_holdings/data/providers/paid/bloomberg.py`
-2. **Implement provider ABCs:** `PriceProvider`, `FundamentalsProvider`, etc. from `base.py`
-3. **Declare capabilities:** Set the `capabilities` frozenset and `source_id` property
-4. **Implement `resolve_ticker`:** Map canonical symbols to vendor-native tickers
-5. **Run contract tests:** The existing suite in `tests/test_provider_contracts.py` validates structural compliance
-6. **Run upgrade-path tests:** `tests/test_upgrade_path.py` validates end-to-end pipeline compatibility (refresh → score → construct)
-7. **Update config:** Point `DATA_SOURCE` to the new adapter
-8. **No changes needed** to scoring, construction, rebalancing, backtesting, or analytics code
+| Dimension | Weight | What it measures |
+|---|---|---|
+| **Fundamental** | 40% | Revenue growth, margins, FCF, valuation, balance sheet |
+| **Thesis alignment** | 30% | How well positioned for the theme over 5 years |
+| **Pricing gap** | 30% | How much the market has NOT priced in the theme exposure |
 
-The upgrade-path test suite proves this works by running the full pipeline with mock paid providers and verifying that:
-- All downstream modules produce valid output
-- Score and weight DataFrames share identical schemas across providers
-- Paid fundamentals produce different rankings (proving factor integration)
+This weighting naturally surfaces Tier 2-3 "picks & shovels" companies — they have decent fundamentals, strong theme alignment, AND unrecognized pricing.
 
-## Development
+## Risk Profiles
 
-### Run all tests
-```bash
-uv run pytest -q
-```
+Two axes: appetite × time horizon.
 
-### Run specific test layers
-```bash
-# Unit/function tests
-uv run pytest tests/test_models.py tests/test_profiles.py tests/test_analytics.py -q
+|  | 3-5yr | 5-10yr | 10yr+ |
+|---|---|---|---|
+| Conservative | 30% thematic | 20% thematic | 15% thematic |
+| Moderate | 50% thematic | 40% thematic | 30% thematic |
+| Aggressive | 75% thematic | 55% thematic | 40% thematic |
 
-# BDD scenarios
-uv run pytest tests/bdd -q
+Thesis horizon is always 3-5 years regardless of time horizon setting. Longer horizons simply allocate less to thematic bets and rely on repeated course correction.
 
-# Provider contract tests
-uv run pytest tests/test_provider_contracts.py -q
+## Macro Regime
 
-# Upgrade-path validation
-uv run pytest tests/test_upgrade_path.py -q
-```
+The system assesses the overall market environment (bull/neutral/bear) from real-time web signals:
 
-### Lint and format
-```bash
-uv run ruff check .
-uv run ruff format --check .
-```
+| Regime | Effect |
+|---|---|
+| **Bull** | Full thematic allocation. Fund all themes above baseline. |
+| **Neutral** | Slightly increase core. Only fund themes with confidence ≥7/10. |
+| **Bear** | Reduce thematic to minimum. Only confidence ≥8/10. Suggest defensive vehicles (BND, TLT, GLD). |
 
-### Coverage
-```bash
-uv run pytest --cov=src/alpha_holdings
-open htmlcov/index.html
-```
+## Supply Chain Tiers
 
-## Tracking
+Every theme maps companies into tiers:
 
-- Long-term roadmap: `PLAN.md`
-- Active execution status: `STATUS.md`
+- **Tier 1 — Demand drivers**: headline companies everyone knows. Typically fully priced.
+- **Tier 2 — Direct enablers**: companies that directly supply Tier 1. Partially priced.
+- **Tier 3 — Picks & shovels**: infrastructure that enables the enablers. Often still valued at sector multiples, not yet priced for theme exposure. **This is where the alpha is.**
 
-## Configuration
+## Quality Filters
 
-See `.env.example` for available settings:
-- `DATA_SOURCE` / `FALLBACK_SOURCE`: Provider selection
-- `DATA_STORAGE_PATH` / `DATABASE_URL`: Storage paths
-- `BENCHMARK_SYMBOL`: Benchmark proxy
-- Portfolio constraint defaults (position caps, turnover limits, etc.)
+Companies must pass minimum thresholds before scoring:
 
-## License
+| Filter | Threshold | Rationale |
+|---|---|---|
+| Market cap | ≥$500M | Excludes uninvestable micro-caps |
+| Avg daily $ volume | ≥$1M | Ensures liquidity for real positions |
+| Debt-to-equity | ≤300 | Rejects over-leveraged companies |
+| Operating margin | ≥-20% | Allows cyclical dips but filters deep losses |
+| Revenue history | Must exist | Filters out pre-revenue explorers/SPACs |
 
-MIT
+Companies that fail these filters are removed before scoring and logged in the output.
+
+## Revenue Exposure
+
+The scoring prompt asks the LLM to estimate what percentage of each company’s revenue is tied to the theme. Companies with <20% revenue exposure get their thesis alignment score halved — a conglomerate with 3% relevant revenue shouldn’t score like a pure-play.
+
+## Entry Timing
+
+Each company gets an entry method recommendation based on valuation + thesis confidence:
+
+| Valuation | Thesis confidence | Entry |
+|---|---|---|
+| Cheap (low P/E, PEG < 1) | ≥7/10 | **Lump Sum** — price is attractive relative to growth |
+| Fair | Any | **DCA** — fundamentals justify gradual entry |
+| Expensive | ≥8/10 | **DCA** — strong thesis but priced in, go slow |
+| Expensive | <8/10 | **Wait** — thesis not strong enough to justify premium |
+
+## Theme Dependencies
+
+After discovering themes, the system maps causal chains between them. For example:
+- A compute-heavy theme **drives demand for** energy/power themes
+- A defense spending theme **amplifies** cybersecurity themes
+- A reshoring theme **shares infrastructure** with grid buildout themes
+
+This surfaces cross-theme opportunities (companies that benefit from multiple theme tailwinds) and flags correlated allocation risk.
+
+## Rebalancing (Course Correction)
+
+The `monitor` command re-evaluates saved themes and generates three levels of rebalancing signals:
+
+| Level | Trigger | Action |
+|---|---|---|
+| **Theme-level** | Thesis weakens or strengthens | Reduce/increase allocation, redeploy to stronger themes or core |
+| **Holding-level** | Company fundamentals deteriorate within a strong theme | Swap to better-positioned company or rotate to theme ETF |
+| **Concentration drift** | A position grew above target weight via price appreciation | Trim to target if thesis softening; accept risk if conviction high |
+
+It also scans for **dip opportunities** — companies that dropped in price but retain strong thesis + fundamentals.
