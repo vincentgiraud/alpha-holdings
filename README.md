@@ -239,8 +239,8 @@ All data persisted to `data/` (gitignored):
 | Command | Frequency | Cost | Purpose |
 |---|---|---|---|
 | `discover` | Weekly | ~$2-4 | Refresh themes, companies, scores, allocation |
-| `opportunities --fresh` | Daily | ~$0 | Catch dip entry points with live prices |
-| `watchlist` | On-demand | ~$0 | Browse high-scorers not yet discounted |
+| `opportunities --fresh` | Daily | No LLM cost (yfinance API only) | Catch dip entry points with live prices |
+| `watchlist` | On-demand | No LLM cost (yfinance API only) | Browse high-scorers not yet discounted |
 | `monitor` | Weekly | ~$1-2 | Full course correction + sell discipline |
 | `backtest` | On-demand | ~$0 | Track performance vs benchmark |
 
