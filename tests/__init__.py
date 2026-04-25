@@ -1,1 +1,0 @@
-"""Alpha Holdings test suite."""
