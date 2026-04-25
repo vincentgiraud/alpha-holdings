@@ -219,6 +219,31 @@ All data persisted to `data/` (gitignored):
 - `data/allocations/` — allocation snapshots for drift tracking
 - `data/cache/` — fundamentals cache (24h TTL)
 
+### Design Decisions
+
+**Multi-pass discovery.** Theme discovery uses two LLM passes: Pass 1 discovers themes with full supply chain mapping, Pass 2 (gap-check) reviews pass 1 output and fills missing layers/companies. This was the single biggest quality improvement — coverage went from 4/10 to 10/10 on a reference benchmark.
+
+**Supply chain layer checklist > reasoning depth.** The discovery prompt requires explicit coverage of 8 supply chain layers (core tech, equipment, components, energy, physical infra, networking, services, raw materials). A/B testing showed this checklist drives completeness more than GPT-5 thinking levels. Medium reasoning with a good prompt beats high reasoning with a vague one.
+
+**Generic gap-check prompt.** The gap-check contains no hardcoded theme hints (nuclear, defense, etc.) — just a generic instruction to check for missing layers and themes. Tested: produces the same coverage as a steered version while staying unbiased and future-proof.
+
+**Reasoning effort (GPT-5 thinking levels).** Tested minimal/low/medium/high:
+- **Medium (default)**: wider net, 10/10 benchmark coverage, ~5 min per LLM call
+- **High**: better ticker accuracy but too selective — missed AMD, Broadcom, SK Hynix. Gap-check timed out.
+- Decision: keep medium for both passes. The `reasoning` parameter is available in the LLM client for future experiments.
+
+**Ticker validation as self-correction.** The LLM frequently gets non-US exchange suffixes wrong. yfinance validation drops invalid tickers after pass 1, then the gap-check often re-suggests the same company with the correct ticker (e.g., Schneider Electric: SE.PA dropped → SU.PA found in gap-check).
+
+### Recommended Workflow
+
+| Command | Frequency | Cost | Purpose |
+|---|---|---|---|
+| `discover` | Weekly | ~$2-4 | Refresh themes, companies, scores, allocation |
+| `opportunities --fresh` | Daily | ~$0 | Catch dip entry points with live prices |
+| `watchlist` | On-demand | ~$0 | Browse high-scorers not yet discounted |
+| `monitor` | Weekly | ~$1-2 | Full course correction + sell discipline |
+| `backtest` | On-demand | ~$0 | Track performance vs benchmark |
+
 ## Scoring
 
 Each company is scored on three dimensions:
