@@ -31,10 +31,13 @@ log = logging.getLogger(__name__)
 
 def allocate(
     themes: list[ThemeThesis],
-    scores: dict[str, list[ThemeScore]],  # theme_name → list of scores
-    etf_recs: dict[str, ETFRecommendation],  # theme_name → ETF rec
+    scores: dict[str, list[ThemeScore]],
+    etf_recs: dict[str, ETFRecommendation],
     profile: RiskProfile,
     regime: MacroRegime,
+    *,
+    fund_data: dict | None = None,
+    capital: float | None = None,
 ) -> PortfolioAllocation:
     """Generate a model portfolio allocation."""
     base_thematic = get_thematic_pct(profile)
@@ -98,6 +101,15 @@ def allocate(
             best = max(t_scores, key=lambda s: s.composite_score)
             entry = best.entry_method
 
+        # Entry prices for sell discipline tracking
+        entry_prices: dict[str, float] = {}
+        if fund_data:
+            for ticker_str in vehicle.split(", "):
+                ticker_str = ticker_str.strip()
+                f = fund_data.get(ticker_str)
+                if f and f.current_price:
+                    entry_prices[ticker_str] = f.current_price
+
         entries.append(AllocationEntry(
             theme=t.name,
             vehicle=vehicle,
@@ -105,6 +117,7 @@ def allocate(
             pct_allocation=round(pct * 100, 1),
             entry_method=entry,
             rationale=f"Confidence {t.confidence_score}/10, avg score {theme_scores[t.name]:.0f}",
+            entry_prices=entry_prices,
         ))
         allocated += pct
 
@@ -120,6 +133,7 @@ def allocate(
         entries=entries,
         core_pct=round(core_pct * 100, 1),
         defensive_pct=round(defensive_pct * 100, 1),
+        capital=capital,
         generated_at=datetime.utcnow(),
     )
 

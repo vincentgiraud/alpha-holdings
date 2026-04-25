@@ -60,15 +60,24 @@ alpha-holdings discover --risk conservative --horizon 10yr+ --focus "energy infr
 - `--horizon` — `3-5yr` / `5-10yr` / `10yr+`. Longer horizons allocate less to thematic bets.
 - `--focus` — Optional focus areas to bias theme discovery (repeatable). The system discovers themes autonomously; this biases but doesn't limit.
 - `--base-currency` — Your base currency code (default: `USD`). Non-base currency tickers will show ⚠ FX risk warnings. Exotic exchange tickers are flagged with broker accessibility tags.
+- `--capital` — Total capital to invest (e.g., `--capital 10000`). When set, the allocation table shows dollar amounts alongside percentages and flags positions below the $200 minimum viable size.
 
 ### `alpha-holdings monitor`
 
-Re-evaluate saved themes against fresh macro signals. Generates rebalancing signals and scans for dip opportunities.
+Re-evaluate saved themes against fresh macro signals. Generates rebalancing signals, scans for dip opportunities, and optionally tracks returns for sell discipline.
 
 ```bash
 alpha-holdings monitor
 alpha-holdings monitor --theme "AI Power Stack"
+alpha-holdings monitor --since 20260425    # Track returns from a specific allocation date
 ```
+
+**Options:**
+- `--theme` — Re-evaluate a specific theme only.
+- `--since` — Date of a saved allocation (YYYYMMDD) to compute returns from. Shows per-ticker entry price vs current price, return %, and sell discipline signals:
+  - **Up >50%** — "Review whether to take profits"
+  - **Up >30% but declining from peak** — "Consider trimming"
+  - **Down >20%** — "Review thesis validity"
 
 ### `alpha-holdings opportunities`
 

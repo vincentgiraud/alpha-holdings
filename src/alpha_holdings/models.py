@@ -284,6 +284,10 @@ class AllocationEntry(BaseModel):
     pct_allocation: float
     entry_method: EntryMethod
     rationale: str
+    entry_prices: dict[str, float] = Field(
+        default_factory=dict,
+        description="Ticker → price at time of allocation, for sell discipline tracking.",
+    )
 
 
 class PortfolioAllocation(BaseModel):
@@ -296,6 +300,10 @@ class PortfolioAllocation(BaseModel):
     defensive_pct: float = Field(
         default=0.0,
         description="Percentage in defensive vehicles (bear regime only).",
+    )
+    capital: Optional[float] = Field(
+        default=None,
+        description="Total capital to invest, if provided via --capital.",
     )
     generated_at: Optional[datetime] = None
 

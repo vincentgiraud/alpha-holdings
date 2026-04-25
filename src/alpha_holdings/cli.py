@@ -89,7 +89,8 @@ def cli(ctx: click.Context, verbose: bool, debug: bool) -> None:
 )
 @click.option("--focus", multiple=True, help="Optional focus areas to bias discovery.")
 @click.option("--base-currency", default="USD", help="Your base currency (for FX risk flags).")
-def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str) -> None:
+@click.option("--capital", type=float, default=None, help="Total capital to invest (shows $ amounts in allocation).")
+def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str, capital: float | None) -> None:
     """Full pipeline: signals → themes → fundamentals → scoring → allocation."""
     from alpha_holdings import allocation as alloc_mod
     from alpha_holdings import etfs as etfs_mod
@@ -168,7 +169,10 @@ def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str
 
     # Step 6: Allocation
     console.rule("[bold]Step 6: Portfolio Allocation[/bold]")
-    allocation = alloc_mod.allocate(themes, scores, etf_recs, profile, regime)
+    allocation = alloc_mod.allocate(
+        themes, scores, etf_recs, profile, regime,
+        fund_data=fund_data, capital=capital,
+    )
 
     # Display results
     console.rule("[bold]Results[/bold]")
@@ -188,7 +192,8 @@ def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str
 
 @cli.command()
 @click.option("--theme", default=None, help="Re-evaluate a specific theme only.")
-def monitor(theme: str | None) -> None:
+@click.option("--since", default=None, help="Date of allocation to track returns from (YYYYMMDD).")
+def monitor(theme: str | None, since: str | None) -> None:
     """Course correction: re-evaluate saved themes against fresh signals."""
     from alpha_holdings import monitor as mon_mod
     from alpha_holdings import themes as theme_mod
@@ -228,6 +233,11 @@ def monitor(theme: str | None) -> None:
     console.rule("[bold]Opportunity Scan[/bold]")
     opps = mon_mod.scan_opportunities(themes)
     _print_opportunities(opps)
+
+    # Sell discipline: track returns from a saved allocation
+    if since:
+        console.rule("[bold]Sell Discipline — Returns Since Allocation[/bold]")
+        _print_sell_discipline(since)
 
     console.print()
     console.print(DISCLAIMER)
@@ -391,10 +401,15 @@ def _print_supply_chain_tree(theme, scores, fund_data, etf_rec, base_currency="U
 
 
 def _print_allocation(allocation) -> None:
+    has_capital = allocation.capital is not None and allocation.capital > 0
+    min_position = 200  # minimum viable position size
+
     table = Table(title="Model Portfolio Allocation", show_lines=True)
     table.add_column("Theme", style="bold")
     table.add_column("Vehicle", style="cyan")
     table.add_column("Allocation %", justify="right")
+    if has_capital:
+        table.add_column("Amount", justify="right")
     table.add_column("Entry", justify="center")
     table.add_column("Rationale", max_width=50)
 
@@ -404,33 +419,54 @@ def _print_allocation(allocation) -> None:
             EntryMethod.DCA: "[yellow]DCA[/yellow]",
             EntryMethod.WAIT: "[red]Wait[/red]",
         }
-        table.add_row(
+        row = [
             e.theme,
             e.vehicle,
             f"{e.pct_allocation:.1f}%",
+        ]
+        if has_capital:
+            amount = allocation.capital * e.pct_allocation / 100
+            amount_str = f"${amount:,.0f}"
+            if amount < min_position:
+                amount_str += " [red]⚠ min[/red]"
+            row.append(amount_str)
+        row.extend([
             entry_style.get(e.entry_method, str(e.entry_method.value)),
             e.rationale,
-        )
+        ])
+        table.add_row(*row)
 
-    table.add_row(
+    core_row = [
         "[dim]Broad Market Core[/dim]",
         "VT / VOO",
         f"{allocation.core_pct:.1f}%",
-        "[yellow]DCA[/yellow]",
-        "Stability + diversification",
-        style="dim",
-    )
+    ]
+    if has_capital:
+        core_row.append(f"${allocation.capital * allocation.core_pct / 100:,.0f}")
+    core_row.extend(["[yellow]DCA[/yellow]", "Stability + diversification"])
+    table.add_row(*core_row, style="dim")
+
     if allocation.defensive_pct > 0:
-        table.add_row(
+        def_row = [
             "[dim]Defensive[/dim]",
             "BND / TLT / GLD",
             f"{allocation.defensive_pct:.1f}%",
-            "[yellow]DCA[/yellow]",
-            "Bear regime defensive allocation",
-            style="dim",
-        )
+        ]
+        if has_capital:
+            def_row.append(f"${allocation.capital * allocation.defensive_pct / 100:,.0f}")
+        def_row.extend(["[yellow]DCA[/yellow]", "Bear regime defensive allocation"])
+        table.add_row(*def_row, style="dim")
 
     console.print(table)
+
+    if has_capital:
+        small_entries = [e for e in allocation.entries if allocation.capital * e.pct_allocation / 100 < min_position]
+        if small_entries:
+            console.print(
+                f"[yellow]⚠ {len(small_entries)} positions below ${min_position} minimum. "
+                f"With ${allocation.capital:,.0f} capital, consider using ETFs for small allocations "
+                f"instead of individual stocks.[/yellow]"
+            )
 
 
 def _print_rebalance_signals(signals) -> None:
@@ -473,6 +509,65 @@ def _print_opportunities(opps) -> None:
             f"{o.thesis_confidence}/10",
             o.recommended_action,
         )
+    console.print(table)
+
+
+def _print_sell_discipline(since: str) -> None:
+    """Load allocation from a date and show returns + sell signals."""
+    import json as json_mod
+    from alpha_holdings.fundamentals import fetch
+
+    alloc_path = Path(f"data/allocations/{since}_allocation.json")
+    if not alloc_path.exists():
+        console.print(f"[yellow]No allocation found for date {since}. Available:[/yellow]")
+        alloc_dir = Path("data/allocations")
+        if alloc_dir.exists():
+            for f in sorted(alloc_dir.glob("*.json")):
+                console.print(f"  {f.stem}")
+        return
+
+    alloc_data = json_mod.loads(alloc_path.read_text())
+    entries = alloc_data.get("entries", [])
+
+    table = Table(title=f"Returns Since {since}", show_lines=True)
+    table.add_column("Ticker", style="bold")
+    table.add_column("Entry Price", justify="right")
+    table.add_column("Current", justify="right")
+    table.add_column("Return %", justify="right")
+    table.add_column("Signal", max_width=50)
+
+    for entry in entries:
+        entry_prices = entry.get("entry_prices", {})
+        for ticker, ep in entry_prices.items():
+            if not ep or ep <= 0:
+                continue
+            try:
+                f = fetch(ticker)
+                cp = f.current_price
+                if not cp:
+                    continue
+                ret = (cp - ep) / ep * 100
+                ret_str = f"[green]+{ret:.1f}%[/green]" if ret >= 0 else f"[red]{ret:.1f}%[/red]"
+
+                # Sell discipline signals
+                signal = ""
+                if ret > 50:
+                    signal = "[yellow]📈 Up >50% — review whether to take profits[/yellow]"
+                elif ret > 30 and f.drawdown_from_peak and f.drawdown_from_peak < -10:
+                    signal = "[yellow]📉 Up >30% from entry but declining from peak — consider trimming[/yellow]"
+                elif ret < -20:
+                    signal = "[red]⚠ Down >20% — review thesis validity[/red]"
+
+                table.add_row(
+                    ticker,
+                    f"${ep:.2f}",
+                    f"${cp:.2f}",
+                    ret_str,
+                    signal,
+                )
+            except Exception:
+                pass
+
     console.print(table)
 
 
