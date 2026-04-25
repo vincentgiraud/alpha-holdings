@@ -816,7 +816,8 @@ def show(what: str, as_holdings: bool) -> None:
                 data = json.loads(files[0].read_text())
                 if as_holdings:
                     holdings_list = _allocation_to_holdings(data)
-                    console.print_json(json.dumps(holdings_list, indent=2))
+                    click.echo(json.dumps(holdings_list, indent=2))
+                    return
                 else:
                     console.print_json(json.dumps(data, indent=2))
             else:
