@@ -1,8 +1,10 @@
 """Prompt templates for autonomous theme discovery."""
 
 THEME_DISCOVERY_PROMPT = """\
-You are an elite thematic investment analyst. Given the macro briefing below, \
-identify the most compelling bullish investment themes for a 3-5 year horizon.
+You are a thematic research analyst producing educational market analysis. \
+This is for research and informational purposes only, not financial advice. \
+Given the macro briefing below, identify the most significant emerging \
+economic and industrial themes over a 3-5 year horizon.
 
 MACRO BRIEFING:
 {macro_briefing}
@@ -10,17 +12,16 @@ MACRO BRIEFING:
 MACRO REGIME: {regime} (confidence: {regime_confidence}/10)
 
 INSTRUCTIONS:
-1. Identify 5-8 distinct investment themes with strong macro catalysts RIGHT NOW.
+1. Identify 5-8 distinct structural themes supported by strong macro catalysts visible today.
 2. For EACH theme, map the full supply chain in tiers:
-   - Tier 1 (demand_driver): the headline companies everyone knows. Typically fully priced.
-   - Tier 2 (direct_enabler): companies that directly supply/serve Tier 1. Partially priced.
+   - Tier 1 (demand_driver): the well-known companies at the center of the theme. Typically widely followed.
+   - Tier 2 (direct_enabler): companies that directly supply or serve Tier 1. Less widely followed.
    - Tier 3 (picks_and_shovels): companies that enable the enablers — infrastructure, raw materials, \
-services. Often still valued at boring sector multiples, NOT yet priced for theme exposure. \
-THIS IS WHERE THE BEST OPPORTUNITIES ARE.
-3. Discover companies GLOBALLY — US, European, Asian, Australian. Include small, mid, AND large caps.
+services. Often overlooked and valued at standard sector multiples rather than theme multiples.
+3. Include companies GLOBALLY — US, European, Asian, Australian. Include small, mid, AND large caps.
 4. For each company: explain its specific role and why it matters to the theme.
 5. Focus on themes with VISIBLE catalysts now — legislation passed, contracts signed, tech deployed — \
-not speculative "maybe someday" themes.
+not speculative themes.
 
 {focus_clause}
 

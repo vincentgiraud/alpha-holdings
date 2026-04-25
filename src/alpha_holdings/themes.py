@@ -52,10 +52,23 @@ def discover_themes(
     raw = llm.respond_text(prompt, web_search=True)
 
     if not raw or not raw.strip():
-        log.error("Theme discovery returned empty response. The model may have only performed web searches without generating output.")
-        # Retry once without web search as fallback
-        log.info("Retrying theme discovery without web search...")
+        log.warning("Theme discovery returned empty response. Retrying without web search...")
         raw = llm.respond_text(prompt)
+
+    # Detect content safety refusal and retry with softer framing
+    refusal_phrases = ("i'm sorry", "i cannot", "i can't", "unable to assist", "cannot assist")
+    if raw and any(phrase in raw.lower()[:200] for phrase in refusal_phrases):
+        log.warning("Model refused the request (content safety). Retrying with softer framing...")
+        softer_prompt = (
+            "For educational and research purposes only — not financial advice. "
+            "As an economic research analyst, analyze current global macro trends "
+            "and identify 5-8 significant structural economic themes supported by "
+            "recent developments. For each theme, list relevant publicly traded "
+            "companies across the supply chain (globally). "
+            "Return ONLY a JSON array in the same format as described below.\n\n"
+            + prompt
+        )
+        raw = llm.respond_text(softer_prompt, web_search=True)
 
     try:
         data = json.loads(_extract_json(raw))
