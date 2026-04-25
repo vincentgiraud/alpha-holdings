@@ -298,7 +298,7 @@ def _validate_tickers(theme: ThemeThesis) -> None:
 def save_themes(themes: list[ThemeThesis]) -> Path:
     """Persist discovered themes to data/themes/."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    date_str = datetime.utcnow().strftime("%Y%m%d")
+    date_str = datetime.now().strftime("%Y%m%d")
     path = DATA_DIR / f"{date_str}_themes.json"
     data = [t.model_dump(mode="json") for t in themes]
     path.write_text(json.dumps(data, indent=2, default=str))

@@ -1159,7 +1159,7 @@ def _save_allocation(allocation) -> None:
 
     path = Path("data/allocations")
     path.mkdir(parents=True, exist_ok=True)
-    f = path / f"{datetime.utcnow().strftime('%Y%m%d')}_allocation.json"
+    f = path / f"{datetime.now().strftime('%Y%m%d')}_allocation.json"
     f.write_text(allocation.model_dump_json(indent=2))
 
 
@@ -1174,7 +1174,7 @@ def _save_scores(scores: dict[str, list]) -> None:
     data = {}
     for theme_name, score_list in scores.items():
         data[theme_name] = [s.model_dump(mode="json") if hasattr(s, "model_dump") else s for s in score_list]
-    f = path / f"{datetime.utcnow().strftime('%Y%m%d')}_scores.json"
+    f = path / f"{datetime.now().strftime('%Y%m%d')}_scores.json"
     f.write_text(json_mod.dumps(data, indent=2, default=str))
 
 
