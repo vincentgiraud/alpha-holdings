@@ -118,6 +118,8 @@ def scan_opportunities(themes: list[ThemeThesis]) -> list[OpportunitySignal]:
                     company.full_ticker,
                     theme.confidence_score,
                     f,
+                    theme_name=theme.name,
+                    supply_chain_tier=company.supply_chain_tier.value,
                 )
                 if opp:
                     opportunities.append(opp)

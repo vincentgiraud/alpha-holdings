@@ -38,7 +38,9 @@ class ValuationLevel(str, Enum):
 
 
 class OpportunityType(str, Enum):
-    BUY_THE_DIP = "buy_the_dip"
+    ON_SALE = "on_sale"
+    STABILIZED = "stabilized"
+    RECOVERING = "recovering"
     CAUTION = "caution"
     AVOID = "avoid"
 
@@ -224,6 +226,7 @@ class Fundamentals(BaseModel):
     return_2yr: Optional[float] = Field(default=None, description="2-year price return %")
     pct_from_200dma: Optional[float] = Field(default=None, description="% distance from 200-day moving average")
     pe_revision_ratio: Optional[float] = Field(default=None, description="forward_pe / trailing_pe. >1 = estimates cut, <1 = estimates rising")
+    pe_vs_own_history: Optional[float] = Field(default=None, description="Current forward P/E as % of 5yr avg forward P/E. <80 = cheap vs self, >120 = expensive vs self")
     fetched_at: Optional[datetime] = None
 
 
@@ -258,6 +261,9 @@ class OpportunitySignal(BaseModel):
     current_price: Optional[float] = None
     drawdown_pct: Optional[float] = None
     recommended_action: str
+    theme_name: Optional[str] = None
+    supply_chain_tier: Optional[str] = None
+    volume_vs_avg: Optional[float] = Field(default=None, description="Current volume / 3-month avg. >1.5 = strong confirmation.")
 
 
 # ---------------------------------------------------------------------------

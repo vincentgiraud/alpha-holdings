@@ -145,11 +145,11 @@ def detect_opportunity(
     ticker: str,
     theme_confidence: int,
     fundamentals: Fundamentals,
+    *,
+    theme_name: str | None = None,
+    supply_chain_tier: str | None = None,
 ) -> Optional[OpportunitySignal]:
-    """Check if a price drop represents a buy-the-dip opportunity."""
-    if fundamentals.drawdown_from_peak is None or fundamentals.drawdown_from_peak > -10:
-        return None  # not a significant dip
-
+    """Detect entry opportunities: on-sale, stabilized, or recovering."""
     # Assess fundamental health
     health_issues = []
     if fundamentals.revenue_growth_3yr_cagr is not None and fundamentals.revenue_growth_3yr_cagr < 0:
@@ -162,25 +162,95 @@ def detect_opportunity(
     fundamentals_intact = len(health_issues) == 0
     health_summary = "Fundamentals intact" if fundamentals_intact else f"Issues: {', '.join(health_issues)}"
 
-    if theme_confidence >= 7 and fundamentals_intact:
-        signal_type = OpportunityType.BUY_THE_DIP
-        action = "Strong lump sum candidate — price dropped but thesis and fundamentals intact."
-    elif theme_confidence >= 7 and not fundamentals_intact:
-        signal_type = OpportunityType.CAUTION
-        action = "Price dropped and some fundamental concerns. Possible early warning, not a clear bargain."
-    else:
-        signal_type = OpportunityType.AVOID
-        action = "Thesis weakening and/or fundamentals deteriorating. Price may be right for a reason."
+    # Volume ratio placeholder (enhanced in batch 2)
+    volume_ratio = None
 
-    return OpportunitySignal(
-        ticker=ticker,
-        signal_type=signal_type,
-        thesis_confidence=theme_confidence,
-        fundamental_health=health_summary,
-        current_price=fundamentals.current_price,
-        drawdown_pct=fundamentals.drawdown_from_peak,
-        recommended_action=action,
+    drawdown = fundamentals.drawdown_from_peak
+    common = dict(
+        ticker=ticker, thesis_confidence=theme_confidence,
+        fundamental_health=health_summary, current_price=fundamentals.current_price,
+        drawdown_pct=drawdown, theme_name=theme_name,
+        supply_chain_tier=supply_chain_tier, volume_vs_avg=volume_ratio,
     )
+
+    # AVOID: thesis weak + fundamentals bad
+    if theme_confidence < 7 and not fundamentals_intact:
+        return OpportunitySignal(
+            signal_type=OpportunityType.AVOID,
+            recommended_action="Thesis weak and fundamentals deteriorating.",
+            **common,
+        )
+
+    # CAUTION: dipped but fundamentals weakening
+    if drawdown is not None and drawdown < -10 and theme_confidence >= 7 and not fundamentals_intact:
+        return OpportunitySignal(
+            signal_type=OpportunityType.CAUTION,
+            recommended_action="Price dropped but some fundamental concerns — possible early warning.",
+            **common,
+        )
+
+    # ON SALE: significant dip with thesis + fundamentals intact
+    if drawdown is not None and drawdown < -10 and theme_confidence >= 7 and fundamentals_intact:
+        return OpportunitySignal(
+            signal_type=OpportunityType.ON_SALE,
+            recommended_action=f"Discounted {drawdown:.0f}% from peak — thesis and fundamentals intact. Lump sum candidate.",
+            **common,
+        )
+
+    # No significant dip — check for STABILIZED or RECOVERING
+    if drawdown is not None and drawdown < -15 and theme_confidence >= 7 and fundamentals_intact:
+        # Check stabilization: was down >15%, now trading in tight range for 30+ days
+        stabilized = _check_stabilized(ticker)
+        if stabilized:
+            return OpportunitySignal(
+                signal_type=OpportunityType.STABILIZED,
+                recommended_action=f"Down {drawdown:.0f}% from peak but price stabilized — selling pressure exhausted. Good DCA entry.",
+                **common,
+            )
+
+        # Check recovery: was down >15%, now bouncing up >10% from recent low
+        recovering = _check_recovering(ticker)
+        if recovering:
+            return OpportunitySignal(
+                signal_type=OpportunityType.RECOVERING,
+                recommended_action=f"Down {drawdown:.0f}% from peak but trend reversing — momentum shifting positive.",
+                **common,
+            )
+
+    return None
+
+
+def _check_stabilized(ticker: str) -> bool:
+    """Check if a stock has stabilized: trading in a <5% range for 30+ days."""
+    try:
+        import yfinance as yf
+        hist = yf.Ticker(ticker).history(period="3mo")
+        if hist is None or len(hist) < 30:
+            return False
+        last_30 = hist["Close"].tail(30)
+        price_range = (last_30.max() - last_30.min()) / last_30.mean() * 100
+        return price_range < 8  # less than 8% range = stabilized
+    except Exception:
+        return False
+
+
+def _check_recovering(ticker: str) -> bool:
+    """Check if a stock is recovering: up >10% from recent 3-month low."""
+    try:
+        import yfinance as yf
+        hist = yf.Ticker(ticker).history(period="3mo")
+        if hist is None or len(hist) < 20:
+            return False
+        recent_low = hist["Close"].min()
+        current = hist["Close"].iloc[-1]
+        if recent_low and recent_low > 0:
+            recovery_pct = (current / recent_low - 1) * 100
+            # Also check it's above 20-day moving average
+            ma_20 = hist["Close"].tail(20).mean()
+            return recovery_pct > 10 and current > ma_20
+    except Exception:
+        pass
+    return False
 
 
 # ---------------------------------------------------------------------------

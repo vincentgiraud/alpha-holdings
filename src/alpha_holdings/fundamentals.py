@@ -78,6 +78,7 @@ def _fetch_yfinance(ticker: str) -> Fundamentals:
     trailing_pe = info.get("trailingPE")
     fwd_pe = info.get("forwardPE")
     pe_revision = round(fwd_pe / trailing_pe, 2) if fwd_pe and trailing_pe and trailing_pe > 0 else None
+    pe_vs_history = _compute_pe_vs_history(t, fwd_pe)
 
     return Fundamentals(
         ticker=ticker,
@@ -104,6 +105,7 @@ def _fetch_yfinance(ticker: str) -> Fundamentals:
         return_2yr=return_2yr,
         pct_from_200dma=pct_200dma,
         pe_revision_ratio=pe_revision,
+        pe_vs_own_history=pe_vs_history,
     )
 
 
@@ -131,6 +133,35 @@ def _compute_200dma_position(ticker_obj, current_price: Optional[float]) -> Opti
             ma_200 = hist["Close"].rolling(200).mean().iloc[-1]
             if ma_200 and ma_200 > 0:
                 return round((current_price / ma_200 - 1) * 100, 2)
+    except Exception:
+        pass
+    return None
+
+
+def _compute_pe_vs_history(ticker_obj, current_forward_pe: Optional[float]) -> Optional[float]:
+    """Compare current forward P/E to the stock's historical P/E range.
+
+    Returns current forward P/E as a percentage of the 5yr average trailing P/E.
+    <80 = cheap vs own history, >120 = expensive vs own history.
+    """
+    if not current_forward_pe or current_forward_pe <= 0:
+        return None
+    try:
+        # Use price/earnings history as proxy
+        hist = ticker_obj.history(period="5y")
+        if hist is None or len(hist) < 200:
+            return None
+        # Approximate historical P/E from price history + current EPS
+        info = ticker_obj.info or {}
+        trailing_eps = info.get("trailingEps")
+        if not trailing_eps or trailing_eps <= 0:
+            return None
+        # Compute average price over 5 years / current EPS as rough historical P/E proxy
+        avg_price_5yr = hist["Close"].mean()
+        if avg_price_5yr and avg_price_5yr > 0:
+            historical_pe_proxy = avg_price_5yr / trailing_eps
+            if historical_pe_proxy > 0:
+                return round((current_forward_pe / historical_pe_proxy) * 100, 0)
     except Exception:
         pass
     return None
@@ -195,7 +226,7 @@ def passes_quality_filter(f: Fundamentals) -> tuple[bool, str]:
 
 
 def get_technical_flags(f: Fundamentals) -> list[str]:
-    """Return warning flags for technical indicators (not rejections, just flags)."""
+    """Return warning/info flags for technical indicators."""
     flags = []
 
     # 200-DMA position: stock in a downtrend
@@ -205,6 +236,13 @@ def get_technical_flags(f: Fundamentals) -> list[str]:
     # Earnings revision: estimates being cut
     if f.pe_revision_ratio is not None and f.pe_revision_ratio > 1.3:
         flags.append(f"⚠ Forward P/E > trailing P/E (ratio {f.pe_revision_ratio:.1f}x) — estimates may be getting cut")
+
+    # Historical P/E comparison
+    if f.pe_vs_own_history is not None:
+        if f.pe_vs_own_history < 70:
+            flags.append(f"🏷️ P/E at {f.pe_vs_own_history:.0f}% of 5yr avg — cheap vs own history")
+        elif f.pe_vs_own_history > 130:
+            flags.append(f"💰 P/E at {f.pe_vs_own_history:.0f}% of 5yr avg — expensive vs own history")
 
     return flags
 

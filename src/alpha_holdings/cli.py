@@ -397,7 +397,7 @@ def opportunities() -> None:
 
     console.rule("[bold]Opportunity Scan[/bold]")
     opps = mon_mod.scan_opportunities(themes)
-    _print_opportunities(opps)
+    _print_opportunities(opps, actionable_only=True)
     console.print()
     console.print(DISCLAIMER)
 
@@ -717,25 +717,44 @@ def _print_rebalance_signals(signals) -> None:
             console.print(f"    To: {s.to_asset}")
 
 
-def _print_opportunities(opps) -> None:
+def _print_opportunities(opps, actionable_only: bool = False) -> None:
+    if actionable_only:
+        opps = [o for o in opps if o.signal_type in (
+            OpportunityType.ON_SALE, OpportunityType.STABILIZED, OpportunityType.RECOVERING,
+        )]
     if not opps:
-        console.print("[dim]No dip opportunities detected.[/dim]")
+        console.print("[dim]No opportunities detected.[/dim]")
         return
-    table = Table(title="Dip Opportunities", show_lines=True)
+
+    # Rank by attractiveness: ON_SALE > STABILIZED > RECOVERING, then by thesis confidence, then by drawdown depth
+    signal_rank = {OpportunityType.ON_SALE: 0, OpportunityType.STABILIZED: 1, OpportunityType.RECOVERING: 2, OpportunityType.CAUTION: 3, OpportunityType.AVOID: 4}
+    opps = sorted(opps, key=lambda o: (signal_rank.get(o.signal_type, 9), -o.thesis_confidence, -(o.drawdown_pct or 0)))
+    table = Table(title="Opportunities", show_lines=True)
     table.add_column("Ticker", style="bold")
     table.add_column("Signal", justify="center")
+    table.add_column("Theme", max_width=25)
+    table.add_column("Tier", justify="center")
     table.add_column("Drawdown", justify="right")
     table.add_column("Thesis", justify="center")
-    table.add_column("Action", max_width=60)
+    table.add_column("Action", max_width=50)
+    signal_style = {
+        OpportunityType.ON_SALE: "[bold green]ON SALE[/bold green]",
+        OpportunityType.STABILIZED: "[bold cyan]STABILIZED[/bold cyan]",
+        OpportunityType.RECOVERING: "[bold blue]RECOVERING[/bold blue]",
+        OpportunityType.CAUTION: "[yellow]CAUTION[/yellow]",
+        OpportunityType.AVOID: "[red]AVOID[/red]",
+    }
+    tier_display = {
+        "tier_1_demand_driver": "T1",
+        "tier_2_direct_enabler": "T2",
+        "tier_3_picks_and_shovels": "[green]T3[/green]",
+    }
     for o in opps:
-        signal_style = {
-            OpportunityType.BUY_THE_DIP: "[bold green]BUY DIP[/bold green]",
-            OpportunityType.CAUTION: "[yellow]CAUTION[/yellow]",
-            OpportunityType.AVOID: "[red]AVOID[/red]",
-        }
         table.add_row(
             o.ticker,
             signal_style.get(o.signal_type, str(o.signal_type.value)),
+            (o.theme_name or "")[:25],
+            tier_display.get(o.supply_chain_tier or "", ""),
             f"{o.drawdown_pct:.1f}%" if o.drawdown_pct else "N/A",
             f"{o.thesis_confidence}/10",
             o.recommended_action,
