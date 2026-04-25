@@ -124,11 +124,28 @@ alpha-holdings monitor --since 20260425    # Track returns from a specific alloc
 
 ### `alpha-holdings opportunities`
 
-Quick scan across all funded themes for buy-the-dip opportunities.
+Quick scan across all funded themes for buy-the-dip opportunities. Shows only actionable signals (ON SALE, STABILIZED, RECOVERING).
 
 ```bash
 alpha-holdings opportunities
 ```
+
+### `alpha-holdings watchlist`
+
+High-scoring companies that aren't discounted yet — your buy-the-dip watchlist. Shows tickers with strong composite scores but no current opportunity signal. No new API calls; reads saved scores and fetches current prices.
+
+```bash
+alpha-holdings watchlist                         # All companies scoring ≥60
+alpha-holdings watchlist --theme "AI"            # Filter to AI theme
+alpha-holdings watchlist --tier 3                # Only T3 "picks & shovels"
+alpha-holdings watchlist --min-score 80          # Only top scorers
+alpha-holdings watchlist --theme "AI" --tier 2 --min-score 70
+```
+
+**Options:**
+- `--theme` — Filter to a specific theme (word-boundary match).
+- `--tier` — Filter to supply chain tier (`1`, `2`, or `3`).
+- `--min-score` — Minimum composite score threshold (default: `60`).
 
 ### `alpha-holdings backtest`
 

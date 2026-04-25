@@ -292,7 +292,13 @@ def explain(theme_filter: str | None, tier: str | None) -> None:
     tier_filter = tier_map.get(tier) if tier else None
 
     if theme_filter:
-        themes = [t for t in themes if theme_filter.lower() in t.name.lower()]
+        import re
+        pattern = re.compile(r"\b" + re.escape(theme_filter) + r"\b", re.IGNORECASE)
+        themes = [t for t in themes if pattern.search(t.name)]
+        if not themes:
+            # Fall back to substring match if word-boundary found nothing
+            themes_fallback = theme_mod.load_latest_themes() or []
+            themes = [t for t in themes_fallback if theme_filter.lower() in t.name.lower()]
         if not themes:
             console.print(f"[yellow]No theme matching '{theme_filter}'.[/yellow]")
             return
@@ -398,6 +404,123 @@ def opportunities() -> None:
     console.rule("[bold]Opportunity Scan[/bold]")
     opps = mon_mod.scan_opportunities(themes)
     _print_opportunities(opps, actionable_only=True)
+    console.print()
+    console.print(DISCLAIMER)
+
+
+@cli.command()
+@click.option("--theme", "theme_filter", default=None, help="Filter to a specific theme.")
+@click.option("--tier", type=click.Choice(["1", "2", "3"]), default=None, help="Filter to a supply chain tier.")
+@click.option("--min-score", type=float, default=60.0, help="Minimum composite score (default: 60).")
+def watchlist(theme_filter: str | None, tier: str | None, min_score: float) -> None:
+    """High-scoring companies not yet on sale — your buy-the-dip watchlist."""
+    import re
+
+    from alpha_holdings import themes as theme_mod
+    from alpha_holdings.fundamentals import fetch, passes_quality_filter
+    from alpha_holdings.scoring import detect_opportunity
+
+    themes = theme_mod.load_latest_themes()
+    if not themes:
+        console.print("[yellow]No saved themes. Run 'discover' first.[/yellow]")
+        return
+
+    scores = _load_scores()
+    if not scores:
+        console.print("[yellow]No saved scores. Run 'discover' first.[/yellow]")
+        return
+
+    # Apply theme filter (word-boundary first, substring fallback)
+    if theme_filter:
+        pattern = re.compile(r"\b" + re.escape(theme_filter) + r"\b", re.IGNORECASE)
+        themes = [t for t in themes if pattern.search(t.name)]
+        if not themes:
+            all_themes = theme_mod.load_latest_themes() or []
+            themes = [t for t in all_themes if theme_filter.lower() in t.name.lower()]
+        if not themes:
+            console.print(f"[yellow]No theme matching '{theme_filter}'.[/yellow]")
+            return
+
+    tier_map = {"1": "tier_1_demand_driver", "2": "tier_2_direct_enabler", "3": "tier_3_picks_and_shovels"}
+    tier_filter = tier_map.get(tier) if tier else None
+    tier_display = {
+        "tier_1_demand_driver": "T1",
+        "tier_2_direct_enabler": "T2",
+        "tier_3_picks_and_shovels": "[green]T3[/green]",
+    }
+
+    rows = []
+    for theme in themes:
+        theme_scores = {s["ticker"]: s for s in scores.get(theme.name, [])}
+        for company in theme.all_companies:
+            ticker = company.full_ticker
+            s = theme_scores.get(ticker)
+            if not s:
+                continue
+            composite = s.get("composite_score", 0)
+            if composite < min_score:
+                continue
+            if tier_filter and company.supply_chain_tier.value != tier_filter:
+                continue
+
+            # Check if this ticker already has an opportunity signal
+            try:
+                f = fetch(ticker)
+                passes, _ = passes_quality_filter(f)
+                if not passes:
+                    continue
+                opp = detect_opportunity(
+                    ticker, theme.confidence_score, f,
+                    theme_name=theme.name,
+                    supply_chain_tier=company.supply_chain_tier.value,
+                )
+                # Skip if it already has an actionable or warning signal
+                if opp:
+                    continue
+                drawdown = f.drawdown_from_peak
+            except Exception:
+                drawdown = None
+
+            rows.append((
+                ticker, composite,
+                s.get("fundamental_score", 0), s.get("thesis_alignment_score", 0),
+                s.get("pricing_gap_score", 0),
+                theme.name, company.supply_chain_tier.value, drawdown,
+            ))
+
+    if not rows:
+        console.print("[dim]No watchlist candidates found (all high-scorers already have opportunity signals or are below threshold).[/dim]")
+        console.print()
+        console.print(DISCLAIMER)
+        return
+
+    # Sort by composite descending
+    rows.sort(key=lambda r: -r[1])
+
+    table = Table(title="Watchlist — High-Conviction, Waiting for Entry", show_lines=True)
+    table.add_column("Ticker", style="bold")
+    table.add_column("Score", justify="right")
+    table.add_column("F", justify="right", style="dim")
+    table.add_column("T†", justify="right")
+    table.add_column("P†", justify="right")
+    table.add_column("Theme", max_width=25)
+    table.add_column("Tier", justify="center")
+    table.add_column("Drawdown", justify="right")
+
+    for ticker, composite, f_sc, t_sc, p_sc, theme_name, tier_val, dd in rows:
+        table.add_row(
+            ticker,
+            f"[bold]{composite:.0f}[/bold]",
+            f"{f_sc:.0f}",
+            f"{t_sc:.0f}",
+            f"{p_sc:.0f}",
+            theme_name[:25],
+            tier_display.get(tier_val, ""),
+            f"{dd:+.1f}%" if dd is not None else "N/A",
+        )
+
+    console.print(table)
+    console.print("[dim]These companies score well but aren't discounted yet. Watch for pullbacks.[/dim]")
     console.print()
     console.print(DISCLAIMER)
 
