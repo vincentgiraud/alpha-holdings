@@ -106,15 +106,8 @@ SUPPLY CHAIN LAYERS TO CHECK:
 For each gap found, suggest SPECIFIC companies (with tickers) that should have been included. \
 Search the web for the most relevant companies in each gap area.
 
-Also check if any ENTIRE THEMES were missed. Common high-conviction themes in the current \
-macro environment that may be absent:
-- Nuclear energy renaissance (for AI data center power)
-- Data center infrastructure buildout
-- AI custom silicon & networking
-- Defense & cybersecurity
-- Nearshoring / friend-shoring
-- Water scarcity & infrastructure
-- Aging demographics & healthcare
+Also check if any ENTIRE THEMES were missed that a seasoned macro analyst would expect \
+given the current global environment. Use web search to validate.
 
 Return a JSON array of additional companies to add. Each entry:
 - "theme_name": which existing theme to add to (use EXACT name from above), or "NEW: <theme name>" for a new theme
