@@ -241,6 +241,9 @@ class ThemeScore(BaseModel):
     composite_score: float = Field(ge=0, le=100)
     valuation: Optional[ValuationContext] = None
     entry_method: EntryMethod = EntryMethod.DCA
+    alignment_reasoning: Optional[str] = None
+    pricing_gap_reasoning: Optional[str] = None
+    revenue_exposure_reasoning: Optional[str] = None
 
 
 class OpportunitySignal(BaseModel):

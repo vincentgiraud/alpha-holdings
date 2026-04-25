@@ -104,7 +104,7 @@ def score_company(
     sector_median = "~18"
     if all_fundamentals:
         sector_median = compute_sector_median_pe(all_fundamentals, company.sector)
-    t_score, p_score, rev_exposure = _combined_llm_scores(
+    t_score, p_score, rev_exposure, reasonings = _combined_llm_scores(
         company, theme, fundamentals, sector_median
     )
 
@@ -135,6 +135,9 @@ def score_company(
         composite_score=round(composite, 1),
         valuation=valuation,
         entry_method=entry,
+        alignment_reasoning=reasonings.get("alignment"),
+        pricing_gap_reasoning=reasonings.get("pricing_gap"),
+        revenue_exposure_reasoning=reasonings.get("revenue_exposure"),
     )
 
 
@@ -222,10 +225,10 @@ def _combined_llm_scores(
     theme: ThemeThesis,
     fundamentals: Fundamentals,
     sector_median_pe: str = "~18",
-) -> tuple[float, float, int]:
+) -> tuple[float, float, int, dict[str, str]]:
     """Get thesis alignment + pricing gap + revenue exposure in a single LLM call.
     
-    Returns (alignment_score, pricing_gap_score, revenue_exposure_pct).
+    Returns (alignment_score, pricing_gap_score, revenue_exposure_pct, reasonings).
     """
     f_summary = _fundamentals_summary(fundamentals)
     prompt = _COMBINED_SCORING_PROMPT.format(
@@ -249,10 +252,15 @@ def _combined_llm_scores(
         alignment = float(data.get("alignment_score", 50))
         pricing_gap = float(data.get("pricing_gap_score", 50))
         rev_exposure = int(data.get("revenue_exposure", 50))
-        return alignment, pricing_gap, rev_exposure
+        reasonings = {
+            "alignment": data.get("alignment_reasoning", ""),
+            "pricing_gap": data.get("pricing_gap_reasoning", ""),
+            "revenue_exposure": data.get("revenue_exposure_reasoning", ""),
+        }
+        return alignment, pricing_gap, rev_exposure, reasonings
     except Exception as exc:
         log.warning("Combined scoring failed for %s: %s", company.ticker, exc)
-        return 50.0, 50.0, 50
+        return 50.0, 50.0, 50, {}
 
 
 def _pricing_gap_score(
@@ -261,7 +269,7 @@ def _pricing_gap_score(
     fundamentals: Fundamentals,
 ) -> float:
     """Standalone pricing gap score (delegates to combined call)."""
-    _, gap, _ = _combined_llm_scores(company, theme, fundamentals)
+    _, gap, _, _ = _combined_llm_scores(company, theme, fundamentals)
     return gap
 
 

@@ -90,8 +90,7 @@ def cli(ctx: click.Context, verbose: bool, debug: bool) -> None:
 @click.option("--focus", multiple=True, help="Optional focus areas to bias discovery.")
 @click.option("--base-currency", default="USD", help="Your base currency (for FX risk flags).")
 @click.option("--capital", type=float, default=None, help="Total capital to invest (shows $ amounts in allocation).")
-@click.option("--holdings", type=click.Path(exists=True), default=None, help="Path to holdings JSON file for overlap detection.")
-def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str, capital: float | None, holdings: str | None) -> None:
+def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str, capital: float | None) -> None:
     """Full pipeline: signals → themes → fundamentals → scoring → allocation."""
     from alpha_holdings import allocation as alloc_mod
     from alpha_holdings import etfs as etfs_mod
@@ -183,63 +182,150 @@ def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str
         _print_supply_chain_tree(t, scores.get(t.name, []), fund_data, etf_recs.get(t.name), base_currency=base_currency.upper())
     _print_allocation(allocation)
 
-    # Holdings overlap analysis
-    if holdings:
-        from alpha_holdings.holdings import load_holdings, get_existing_exposure, analyze_overlap
-
-        hp = load_holdings(holdings)
-        if hp.holdings:
-            existing = get_existing_exposure(hp)
-            held_tickers = {h.ticker.upper() for h in hp.holdings}
-            console.rule("[bold]Holdings Overlap Analysis[/bold]")
-            has_overlap = False
-
-            # Check core allocation overlap (VT, VOO, etc.)
-            core_vehicles = {"VT", "VOO", "SPY", "IWDA.AS", "VWCE.DE"}
-            core_overlap = held_tickers & core_vehicles
-            if core_overlap:
-                has_overlap = True
-                core_amt = f" (${allocation.capital * allocation.core_pct / 100:,.0f})" if allocation.capital else ""
-                for t in core_overlap:
-                    console.print(
-                        f"  [cyan]ℹ {t}[/cyan] — you already hold this. "
-                        f"Core allocation of {allocation.core_pct:.0f}%{core_amt} adds to your existing position."
-                    )
-
-            # Check thematic allocation overlap
-            for entry in allocation.entries:
-                tickers = [t.strip() for t in entry.vehicle.split(",")]
-
-                # Direct overlap: user holds the exact recommended ticker
-                for t in tickers:
-                    if t.upper() in held_tickers:
-                        has_overlap = True
-                        console.print(
-                            f"  [yellow]⚠ {t}[/yellow] — you already hold this directly. "
-                            f"[bold]{entry.theme}[/bold] adds {entry.pct_allocation:.1f}% — "
-                            f"review your total desired exposure before sizing."
-                        )
-
-                # Indirect overlap: user holds an index that contains a recommended ticker
-                overlaps = analyze_overlap(existing, tickers, entry.pct_allocation)
-                for o in overlaps:
-                    # Skip if already flagged as direct holding
-                    if o["ticker"].upper() in held_tickers:
-                        continue
-                    has_overlap = True
-                    console.print(
-                        f"  [yellow]⚠ {o['ticker']}[/yellow] — "
-                        f"you already hold ~{o['existing_pct']:.1f}% via index funds. "
-                        f"Adding [bold]{entry.theme}[/bold] brings effective weight to "
-                        f"~{o['combined_pct']:.1f}%"
-                    )
-
-            if not has_overlap:
-                console.print("  [green]No significant overlap between your holdings and recommended themes.[/green]")
-
     # Save
     theme_mod.save_themes(themes)
     _save_allocation(allocation)
+    _save_scores(scores)
+
+    console.print()
+    console.print(DISCLAIMER)
+
+
+@cli.command()
+@click.argument("file", type=click.Path(exists=True))
+def holdings(file: str) -> None:
+    """Analyze overlap between your existing holdings and the latest saved allocation."""
+    from alpha_holdings.holdings import load_holdings, get_existing_exposure, analyze_overlap
+
+    # Load latest allocation
+    alloc_path = Path("data/allocations")
+    if not alloc_path.exists():
+        console.print("[yellow]No saved allocations. Run 'discover' first.[/yellow]")
+        return
+    files = sorted(alloc_path.glob("*.json"), reverse=True)
+    if not files:
+        console.print("[yellow]No saved allocations. Run 'discover' first.[/yellow]")
+        return
+
+    import json as json_mod
+    alloc_data = json_mod.loads(files[0].read_text())
+    entries = alloc_data.get("entries", [])
+    core_pct = alloc_data.get("core_pct", 60)
+    capital = alloc_data.get("capital")
+
+    hp = load_holdings(file)
+    if not hp.holdings:
+        console.print("[yellow]No holdings found in the file.[/yellow]")
+        return
+
+    existing = get_existing_exposure(hp)
+    held_tickers = {h.ticker.upper() for h in hp.holdings}
+
+    console.rule("[bold]Holdings Overlap Analysis[/bold]")
+    has_overlap = False
+
+    # Core overlap
+    core_vehicles = {"VT", "VOO", "SPY", "IWDA.AS", "VWCE.DE"}
+    core_overlap = held_tickers & core_vehicles
+    if core_overlap:
+        has_overlap = True
+        core_amt = f" (${capital * core_pct / 100:,.0f})" if capital else ""
+        for t in core_overlap:
+            console.print(
+                f"  [cyan]ℹ {t}[/cyan] — you already hold this. "
+                f"Core allocation of {core_pct:.0f}%{core_amt} adds to your existing position."
+            )
+
+    # Thematic overlap
+    for entry in entries:
+        tickers = [t.strip() for t in entry.get("vehicle", "").split(",")]
+        theme_name = entry.get("theme", "?")
+        pct = entry.get("pct_allocation", 0)
+
+        for t in tickers:
+            if t.upper() in held_tickers:
+                has_overlap = True
+                console.print(
+                    f"  [yellow]⚠ {t}[/yellow] — you already hold this directly. "
+                    f"[bold]{theme_name}[/bold] adds {pct:.1f}% — "
+                    f"review your total desired exposure before sizing."
+                )
+
+        overlaps = analyze_overlap(existing, tickers, pct)
+        for o in overlaps:
+            if o["ticker"].upper() in held_tickers:
+                continue
+            has_overlap = True
+            console.print(
+                f"  [yellow]⚠ {o['ticker']}[/yellow] — "
+                f"you already hold ~{o['existing_pct']:.1f}% via index funds. "
+                f"Adding [bold]{theme_name}[/bold] brings effective weight to "
+                f"~{o['combined_pct']:.1f}%"
+            )
+
+    if not has_overlap:
+        console.print("  [green]No significant overlap between your holdings and recommended themes.[/green]")
+
+    console.print()
+    console.print(DISCLAIMER)
+
+
+@cli.command()
+@click.option("--theme", "theme_filter", default=None, help="Filter to a specific theme.")
+@click.option("--tier", type=click.Choice(["1", "2", "3"]), default=None, help="Filter to a specific supply chain tier.")
+def explain(theme_filter: str | None, tier: str | None) -> None:
+    """Show LLM reasoning behind each company's scores."""
+    from alpha_holdings import themes as theme_mod
+    from alpha_holdings.models import SupplyChainTier
+
+    themes = theme_mod.load_latest_themes()
+    if not themes:
+        console.print("[yellow]No saved themes. Run 'discover' first.[/yellow]")
+        return
+
+    scores = _load_scores()
+    if not scores:
+        console.print("[yellow]No saved scores. Run 'discover' first to generate scores with reasoning.[/yellow]")
+        return
+
+    tier_map = {"1": SupplyChainTier.TIER_1_DEMAND_DRIVER, "2": SupplyChainTier.TIER_2_DIRECT_ENABLER, "3": SupplyChainTier.TIER_3_PICKS_AND_SHOVELS}
+    tier_filter = tier_map.get(tier) if tier else None
+
+    if theme_filter:
+        themes = [t for t in themes if theme_filter.lower() in t.name.lower()]
+        if not themes:
+            console.print(f"[yellow]No theme matching '{theme_filter}'.[/yellow]")
+            return
+
+    console.rule("[bold]Score Explanations[/bold]")
+
+    for t in themes:
+        theme_scores = {s["ticker"]: s for s in scores.get(t.name, [])}
+        companies = t.all_companies
+        if tier_filter:
+            companies = [c for c in companies if c.supply_chain_tier == tier_filter]
+        if not companies:
+            continue
+
+        console.print(f"\n[bold cyan]{t.name}[/bold cyan] (confidence: {t.confidence_score}/10)")
+        for c in companies:
+            sc = theme_scores.get(c.full_ticker, {})
+            if not sc:
+                continue
+            composite = sc.get("composite_score", "?")
+            console.print(f"\n  [bold]{c.full_ticker}[/bold] {c.name} — score: {composite}")
+            console.print(f"    Role: {c.role_in_theme}")
+            ar = sc.get("alignment_reasoning")
+            pr = sc.get("pricing_gap_reasoning")
+            rr = sc.get("revenue_exposure_reasoning")
+            if ar:
+                console.print(f"    [dim]T†: {ar}[/dim]")
+            if pr:
+                console.print(f"    [dim]P†: {pr}[/dim]")
+            if rr:
+                console.print(f"    [dim]R†: {rr}[/dim]")
+            if not (ar or pr or rr):
+                console.print(f"    [dim]No reasoning available — run 'discover' again to generate.[/dim]")
 
     console.print()
     console.print(DISCLAIMER)
@@ -717,6 +803,34 @@ def _save_allocation(allocation) -> None:
     path.mkdir(parents=True, exist_ok=True)
     f = path / f"{datetime.utcnow().strftime('%Y%m%d')}_allocation.json"
     f.write_text(allocation.model_dump_json(indent=2))
+
+
+def _save_scores(scores: dict[str, list]) -> None:
+    """Save scores with reasoning to data/scores/ for the explain command."""
+    import json as json_mod
+    from datetime import datetime
+
+    path = Path("data/scores")
+    path.mkdir(parents=True, exist_ok=True)
+    # Convert ThemeScore objects to dicts
+    data = {}
+    for theme_name, score_list in scores.items():
+        data[theme_name] = [s.model_dump(mode="json") if hasattr(s, "model_dump") else s for s in score_list]
+    f = path / f"{datetime.utcnow().strftime('%Y%m%d')}_scores.json"
+    f.write_text(json_mod.dumps(data, indent=2, default=str))
+
+
+def _load_scores() -> dict[str, list[dict]]:
+    """Load the most recent saved scores."""
+    import json as json_mod
+
+    path = Path("data/scores")
+    if not path.exists():
+        return {}
+    files = sorted(path.glob("*_scores.json"), reverse=True)
+    if not files:
+        return {}
+    return json_mod.loads(files[0].read_text())
 
 
 if __name__ == "__main__":
