@@ -29,7 +29,19 @@ console = Console()
 
 DISCLAIMER = (
     "[dim italic]NOT FINANCIAL ADVICE — this is an AI-assisted research tool. "
-    "Verify all data before making investment decisions.[/dim italic]"
+    "Verify all data before making investment decisions. "
+    "Rebalancing may trigger taxable events. International tickers carry FX risk and spread costs.[/dim italic]"
+)
+
+UNCERTAINTY_NOTICE = (
+    "[yellow]⚠ Before You Act[/yellow]\n"
+    "• Scores combine quantitative data (fundamentals) and AI judgment (thesis, pricing gap, revenue exposure).\n"
+    "  They are [bold]estimates, NOT precise measurements[/bold].\n"
+    "• Thesis alignment & pricing gap scores are LLM-generated — not verified against analyst consensus.\n"
+    "• This tool discovers themes from public news and LLM reasoning. It cannot detect insider information,\n"
+    "  unpublished regulatory actions, or black swan events.\n"
+    "• Your broad market core allocation is your protection against what this tool cannot see.\n"
+    "• Items marked [dim italic]†[/dim italic] are AI-estimated."
 )
 
 REGIME_BADGE = {
@@ -76,7 +88,8 @@ def cli(ctx: click.Context, verbose: bool, debug: bool) -> None:
     help="Investment time horizon.",
 )
 @click.option("--focus", multiple=True, help="Optional focus areas to bias discovery.")
-def discover(risk: str, horizon: str, focus: tuple[str, ...]) -> None:
+@click.option("--base-currency", default="USD", help="Your base currency (for FX risk flags).")
+def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str) -> None:
     """Full pipeline: signals → themes → fundamentals → scoring → allocation."""
     from alpha_holdings import allocation as alloc_mod
     from alpha_holdings import etfs as etfs_mod
@@ -159,8 +172,10 @@ def discover(risk: str, horizon: str, focus: tuple[str, ...]) -> None:
 
     # Display results
     console.rule("[bold]Results[/bold]")
+    console.print(Panel(UNCERTAINTY_NOTICE, title="⚠ Uncertainty Notice", border_style="yellow"))
+    console.print()
     for t in themes:
-        _print_supply_chain_tree(t, scores.get(t.name, []), fund_data, etf_recs.get(t.name))
+        _print_supply_chain_tree(t, scores.get(t.name, []), fund_data, etf_recs.get(t.name), base_currency=base_currency.upper())
     _print_allocation(allocation)
 
     # Save
@@ -319,7 +334,9 @@ def _print_dependencies(deps) -> None:
     console.print(table)
 
 
-def _print_supply_chain_tree(theme, scores, fund_data, etf_rec) -> None:
+def _print_supply_chain_tree(theme, scores, fund_data, etf_rec, base_currency="USD") -> None:
+    from alpha_holdings.config import get_accessibility, get_currency
+
     score_map = {s.ticker: s for s in scores}
     tree = Tree(f"[bold cyan]{theme.name}[/bold cyan] [dim](confidence: {theme.confidence_score}/10)[/dim]")
 
@@ -336,7 +353,26 @@ def _print_supply_chain_tree(theme, scores, fund_data, etf_rec) -> None:
             sc = score_map.get(c.full_ticker)
             f = fund_data.get(c.full_ticker)
             pe_str = f"({f.forward_pe:.0f}x fwd P/E)" if f and f.forward_pe else ""
-            score_str = f"[score: {sc.composite_score:.0f}]" if sc else ""
+
+            # Currency & broker accessibility
+            ccy = get_currency(c.exchange_suffix)
+            access = get_accessibility(c.exchange_suffix)
+            fx_tag = f" [red]⚠ FX[/red]" if ccy != base_currency else ""
+            access_tag = ""
+            if access == "exotic":
+                access_tag = " [red]\\[exotic][/red]"
+            elif access == "check_broker":
+                access_tag = " [yellow]\\[check broker][/yellow]"
+            ccy_str = f"({ccy}{fx_tag})"
+
+            # Data-derived score in bold, LLM scores in dim italic with †
+            score_parts = []
+            if sc:
+                score_parts.append(f"[bold]{sc.composite_score:.0f}[/bold]")
+                score_parts.append(f"[dim italic]F:{sc.fundamental_score:.0f}[/dim italic]")
+                score_parts.append(f"[dim italic]T:{sc.thesis_alignment_score:.0f}†[/dim italic]")
+                score_parts.append(f"[dim italic]P:{sc.pricing_gap_score:.0f}†[/dim italic]")
+            score_str = f"[{'/'.join(score_parts)}]" if score_parts else ""
             entry_str = ""
             if sc and sc.entry_method == EntryMethod.LUMP_SUM:
                 entry_str = " 🟢 lump sum"
@@ -344,12 +380,13 @@ def _print_supply_chain_tree(theme, scores, fund_data, etf_rec) -> None:
                 entry_str = " ⚡ DCA"
             elif sc and sc.entry_method == EntryMethod.WAIT:
                 entry_str = " 🔴 wait"
-            tier_branch.add(f"[{style}]{c.full_ticker}[/{style}] {c.name} {pe_str} {score_str}{entry_str}")
+            tier_branch.add(f"[{style}]{c.full_ticker}[/{style}] {c.name} {ccy_str} {pe_str} {score_str}{entry_str}{access_tag}")
 
     if etf_rec and etf_rec.etf_ticker:
         tree.add(f"[blue]ETF: {etf_rec.etf_ticker} — {etf_rec.reasoning}[/blue]")
 
     console.print(tree)
+    console.print("[dim italic]  † = AI-estimated (thesis alignment, pricing gap)[/dim italic]")
     console.print()
 
 

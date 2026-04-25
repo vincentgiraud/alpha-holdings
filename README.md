@@ -37,9 +37,9 @@ alpha-holdings discover --risk moderate --horizon 3-5yr
 
 | Variable | Required | Description |
 |---|---|---|
-| `AZURE_OPENAI_BASE_URL` | Yes | Foundry endpoint URL (e.g., `https://<name>.services.ai.azure.com/api/projects/<project>/openai/v1/`) |
-| `AZURE_OPENAI_MODEL` | Yes | Primary model deployment name (e.g., `gpt-5.4-1`) |
-| `AZURE_OPENAI_MODEL_MINI` | Yes | Lightweight model deployment name (e.g., `gpt-5.4-mini-1`) |
+| `AZURE_OPENAI_BASE_URL` | Yes | Foundry endpoint URL (e.g., `https://<your-resource>.services.ai.azure.com/api/projects/<your-project>/openai/v1/`) |
+| `AZURE_OPENAI_MODEL` | Yes | Primary model deployment name (e.g., `gpt-5.4`) |
+| `AZURE_OPENAI_MODEL_MINI` | Yes | Lightweight model deployment name (e.g., `gpt-5.4-mini`) |
 
 See [.env.example](.env.example) for the template.
 
@@ -59,6 +59,7 @@ alpha-holdings discover --risk conservative --horizon 10yr+ --focus "energy infr
 - `--risk` — `conservative` / `moderate` / `aggressive`. Controls thematic vs core allocation split, max concentration per theme, and vehicle preference (ETF vs stocks).
 - `--horizon` — `3-5yr` / `5-10yr` / `10yr+`. Longer horizons allocate less to thematic bets.
 - `--focus` — Optional focus areas to bias theme discovery (repeatable). The system discovers themes autonomously; this biases but doesn't limit.
+- `--base-currency` — Your base currency code (default: `USD`). Non-base currency tickers will show ⚠ FX risk warnings. Exotic exchange tickers are flagged with broker accessibility tags.
 
 ### `alpha-holdings monitor`
 
@@ -143,6 +144,22 @@ Each company is scored on three dimensions:
 
 This weighting naturally surfaces Tier 2-3 "picks & shovels" companies — they have decent fundamentals, strong theme alignment, AND unrecognized pricing.
 
+### Reading the Score Display
+
+In the supply chain tree, each scored company shows:
+
+```
+NVDA (USD) (22x fwd P/E) [64/F:55/T:72†/P:68†] ⚡ DCA
+```
+
+- `64` — composite score (bold)
+- `F:55` — fundamental score (data-derived)
+- `T:72†` — thesis alignment (AI-estimated, marked with †)
+- `P:68†` — pricing gap (AI-estimated, marked with †)
+- `⚡ DCA` / `🟢 lump sum` / `🔴 wait` — entry timing recommendation
+- `(USD)` — trading currency. `⚠ FX` appears for non-base currencies.
+- `[exotic]` / `[check broker]` — broker accessibility warning for non-standard exchanges.
+
 ## Risk Profiles
 
 Two axes: appetite × time horizon.
@@ -222,3 +239,12 @@ The `monitor` command re-evaluates saved themes and generates three levels of re
 | **Concentration drift** | A position grew above target weight via price appreciation | Trim to target if thesis softening; accept risk if conviction high |
 
 It also scans for **dip opportunities** — companies that dropped in price but retain strong thesis + fundamentals.
+
+## Disclaimers & Limitations
+
+- **Not financial advice.** This is an AI-assisted research tool. All output should be verified independently before making investment decisions.
+- **LLM-generated scores.** Thesis alignment and pricing gap scores (marked with †) are estimated by the AI model, not sourced from analyst consensus or verified research. They can be confidently wrong.
+- **Unknown unknowns.** The tool discovers themes from public news and LLM reasoning. It cannot detect insider information, unpublished regulatory actions, or black swan events. Your broad market core allocation is your protection against what this tool cannot see.
+- **Tax implications.** Rebalancing and selling positions may trigger taxable capital gains events. Consult a tax advisor for your jurisdiction.
+- **FX risk.** International tickers carry currency risk and higher spread costs that are not reflected in the scoring.
+- **No backtesting yet.** The tool has no track record. Past themes and scores have not been validated against historical returns.

@@ -77,6 +77,53 @@ QUALITY_FLOOR = {
     "require_revenue": True,  # must have non-zero market cap as proxy
 }
 
+# ---------------------------------------------------------------------------
+# Exchange accessibility & currency
+# ---------------------------------------------------------------------------
+
+EXCHANGE_ACCESS: dict[str, str] = {
+    "": "easy",          # No suffix = US
+    "L": "easy",         # London
+    "PA": "check_broker",  # Paris
+    "DE": "check_broker",  # Frankfurt/Xetra
+    "AS": "check_broker",  # Amsterdam
+    "CO": "check_broker",  # Copenhagen
+    "OL": "check_broker",  # Oslo
+    "ST": "check_broker",  # Stockholm
+    "HE": "check_broker",  # Helsinki
+    "MI": "check_broker",  # Milan
+    "MC": "check_broker",  # Madrid
+    "SW": "check_broker",  # Swiss
+    "T": "exotic",       # Tokyo
+    "TW": "exotic",      # Taiwan
+    "KS": "exotic",      # Korea
+    "HK": "check_broker",  # Hong Kong
+    "SS": "exotic",      # Shanghai
+    "SZ": "exotic",      # Shenzhen
+    "AX": "check_broker",  # Australia
+    "TO": "check_broker",  # Toronto
+    "NS": "exotic",      # India NSE
+    "BO": "exotic",      # India BSE
+    "MX": "exotic",      # Mexico
+    "SA": "exotic",      # Brazil
+}
+
+EXCHANGE_CURRENCY: dict[str, str] = {
+    "": "USD", "L": "GBP", "PA": "EUR", "DE": "EUR", "AS": "EUR",
+    "CO": "DKK", "OL": "NOK", "ST": "SEK", "HE": "EUR", "MI": "EUR",
+    "MC": "EUR", "SW": "CHF", "T": "JPY", "TW": "TWD", "KS": "KRW",
+    "HK": "HKD", "SS": "CNY", "SZ": "CNY", "AX": "AUD", "TO": "CAD",
+    "NS": "INR", "BO": "INR", "MX": "MXN", "SA": "BRL",
+}
+
+
+def get_accessibility(exchange_suffix: str | None) -> str:
+    return EXCHANGE_ACCESS.get(exchange_suffix or "", "check_broker")
+
+
+def get_currency(exchange_suffix: str | None) -> str:
+    return EXCHANGE_CURRENCY.get(exchange_suffix or "", "USD")
+
 
 def get_thematic_pct(profile: RiskProfile) -> float:
     return THEMATIC_PCT[(profile.appetite, profile.time_horizon)]
