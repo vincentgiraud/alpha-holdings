@@ -127,7 +127,8 @@ alpha-holdings monitor --since 20260425    # Track returns from a specific alloc
 Quick scan across all funded themes for buy-the-dip opportunities. Shows only actionable signals (ON SALE, STABILIZED, RECOVERING).
 
 ```bash
-alpha-holdings opportunities
+alpha-holdings opportunities              # Uses cached prices (fast)
+alpha-holdings opportunities --fresh      # Fetches live prices (bypasses 24h cache)
 ```
 
 ### `alpha-holdings watchlist`

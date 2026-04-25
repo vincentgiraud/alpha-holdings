@@ -114,6 +114,7 @@ def respond(
     web_search: bool = False,
     domain_filter: list[str] | None = None,
     structured: dict | None = None,
+    reasoning: str | None = None,
 ) -> Any:
     """Call the Responses API with optional web search and structured output.
 
@@ -123,6 +124,7 @@ def respond(
         web_search: Enable the web_search tool for real-time grounding.
         domain_filter: Restrict web search to these domains.
         structured: If provided, pass as `text` format for structured output.
+        reasoning: Reasoning effort level: 'minimal', 'low', 'medium', 'high'. None = model default.
 
     Returns:
         The response object from the Responses API.
@@ -131,6 +133,9 @@ def respond(
     model = get_model(mini=mini)
 
     kwargs: dict[str, Any] = {"model": model, "input": prompt}
+
+    if reasoning:
+        kwargs["reasoning"] = {"effort": reasoning, "summary": "auto"}
 
     if web_search:
         tool: dict[str, Any] = {"type": "web_search"}
@@ -182,6 +187,7 @@ def respond_text(
     mini: bool = False,
     web_search: bool = False,
     domain_filter: list[str] | None = None,
+    reasoning: str | None = None,
 ) -> str:
     """Convenience wrapper that returns just the output text."""
     response = respond(
@@ -189,6 +195,7 @@ def respond_text(
         mini=mini,
         web_search=web_search,
         domain_filter=domain_filter,
+        reasoning=reasoning,
     )
     text = response.output_text
     if not text:

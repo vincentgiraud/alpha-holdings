@@ -391,7 +391,8 @@ def monitor(theme: str | None, since: str | None) -> None:
 
 
 @cli.command()
-def opportunities() -> None:
+@click.option("--fresh", is_flag=True, default=False, help="Bypass price cache for fresh data.")
+def opportunities(fresh: bool) -> None:
     """Quick scan for dip opportunities across funded themes."""
     from alpha_holdings import monitor as mon_mod
     from alpha_holdings import themes as theme_mod
@@ -402,7 +403,9 @@ def opportunities() -> None:
         return
 
     console.rule("[bold]Opportunity Scan[/bold]")
-    opps = mon_mod.scan_opportunities(themes)
+    if fresh:
+        console.print("[dim]Fetching fresh prices (bypassing cache)...[/dim]")
+    opps = mon_mod.scan_opportunities(themes, skip_cache=fresh)
     _print_opportunities(opps, actionable_only=True)
     console.print()
     console.print(DISCLAIMER)

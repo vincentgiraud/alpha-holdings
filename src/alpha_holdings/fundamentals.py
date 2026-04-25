@@ -18,11 +18,12 @@ CACHE_DIR = Path("data/cache")
 CACHE_TTL = timedelta(hours=24)
 
 
-def fetch(ticker: str) -> Fundamentals:
+def fetch(ticker: str, *, skip_cache: bool = False) -> Fundamentals:
     """Fetch fundamentals for a single ticker, using cache if fresh."""
-    cached = _load_cache(ticker)
-    if cached:
-        return cached
+    if not skip_cache:
+        cached = _load_cache(ticker)
+        if cached:
+            return cached
 
     log.info("Fetching fundamentals for %s...", ticker)
     fundamentals = _fetch_yfinance(ticker)
