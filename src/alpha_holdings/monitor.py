@@ -101,12 +101,19 @@ def generate_rebalance_signals(
 
 
 def scan_opportunities(themes: list[ThemeThesis]) -> list[OpportunitySignal]:
-    """Scan all funded themes for dip opportunities."""
+    """Scan all funded themes for dip opportunities, filtering out low-quality companies."""
+    from alpha_holdings.fundamentals import passes_quality_filter
+
     opportunities: list[OpportunitySignal] = []
     for theme in themes:
         for company in theme.all_companies:
             try:
                 f = fetch(company.full_ticker)
+                # Skip companies that fail quality filters
+                passes, reason = passes_quality_filter(f)
+                if not passes:
+                    log.debug("Skipping %s in opportunity scan: %s", company.full_ticker, reason)
+                    continue
                 opp = detect_opportunity(
                     company.full_ticker,
                     theme.confidence_score,
