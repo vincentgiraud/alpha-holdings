@@ -175,7 +175,12 @@ def _is_likely_etf(ticker: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def load_holdings(path: str | Path) -> HoldingsPortfolio:
-    """Load holdings from a JSON file."""
+    """Load holdings from a JSON file.
+
+    Accepts two formats:
+    - Holdings list: [{"ticker": "...", "shares": N, "avg_cost": X}, ...]
+    - Allocation file: {"entries": [...], ...} (auto-detected from data/allocations/)
+    """
     p = Path(path)
     if not p.exists():
         log.warning("Holdings file not found: %s", p)
@@ -184,7 +189,28 @@ def load_holdings(path: str | Path) -> HoldingsPortfolio:
     data = json.loads(p.read_text())
     if isinstance(data, list):
         return HoldingsPortfolio(holdings=[Holding(**h) for h in data])
+    # Auto-detect allocation format (has "entries" key with vehicles + entry_prices)
+    if isinstance(data, dict) and "entries" in data:
+        return _allocation_to_portfolio(data)
     return HoldingsPortfolio(**data)
+
+
+def _allocation_to_portfolio(alloc_data: dict) -> HoldingsPortfolio:
+    """Convert a PortfolioAllocation dict into a HoldingsPortfolio.
+
+    Extracts tickers from allocation entries and uses entry_prices as avg_cost.
+    """
+    holdings: list[Holding] = []
+    for entry in alloc_data.get("entries", []):
+        entry_prices = entry.get("entry_prices", {})
+        tickers = [t.strip() for t in entry.get("vehicle", "").split(",") if t.strip()]
+        for ticker in tickers:
+            holdings.append(Holding(
+                ticker=ticker,
+                shares=0,
+                avg_cost=entry_prices.get(ticker),
+            ))
+    return HoldingsPortfolio(holdings=holdings)
 
 
 def get_existing_exposure(holdings: HoldingsPortfolio) -> dict[str, float]:

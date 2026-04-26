@@ -69,7 +69,12 @@ Analyze overlap between your existing positions and the latest saved allocation.
 ```bash
 alpha-holdings holdings --file holdings.example.json
 alpha-holdings holdings --file data/my_portfolio.json
+alpha-holdings holdings --file data/allocations/xxxxxxxx_allocation.json  # accepts allocation files directly
 ```
+
+Accepts two formats:
+- **Holdings JSON**: `[{"ticker": "VT", "shares": 100, "avg_cost": 95.50}, ...]`
+- **Allocation JSON**: the `data/allocations/*_allocation.json` files from `discover` — auto-detected, no conversion needed
 
 ### `alpha-holdings explain`
 
@@ -184,11 +189,7 @@ Display saved data from previous runs.
 ```bash
 alpha-holdings show themes
 alpha-holdings show allocation
-alpha-holdings show allocation --as-holdings    # Export as holdings JSON
-alpha-holdings show allocation --as-holdings > data/my_portfolio.json  # Save for 'holdings --file'
 ```
-
-`--as-holdings` converts the allocation into the same `[{"ticker", "shares", "avg_cost"}]` format used by `holdings --file`, using entry prices as `avg_cost`. This lets you feed one run's output into the next for overlap analysis.
 
 ### Global Options
 

@@ -800,8 +800,7 @@ def _add_return_row(table: Table, label: str, value) -> None:
 
 @cli.command()
 @click.argument("what", type=click.Choice(["themes", "allocation"]))
-@click.option("--as-holdings", is_flag=True, default=False, help="Export allocation as holdings JSON (for piping into 'holdings --file').")
-def show(what: str, as_holdings: bool) -> None:
+def show(what: str) -> None:
     """Display saved themes or allocation data."""
     if what == "themes":
         from alpha_holdings import themes as theme_mod
@@ -817,37 +816,13 @@ def show(what: str, as_holdings: bool) -> None:
             files = sorted(path.glob("*.json"), reverse=True)
             if files:
                 data = json.loads(files[0].read_text())
-                if as_holdings:
-                    holdings_list = _allocation_to_holdings(data)
-                    click.echo(json.dumps(holdings_list, indent=2))
-                    return
-                else:
-                    console.print_json(json.dumps(data, indent=2))
+                console.print_json(json.dumps(data, indent=2))
             else:
                 console.print("[yellow]No saved allocations.[/yellow]")
         else:
             console.print("[yellow]No saved allocations.[/yellow]")
     console.print()
     console.print(DISCLAIMER)
-
-
-def _allocation_to_holdings(alloc_data: dict) -> list[dict]:
-    """Convert an allocation dict into holdings-compatible JSON.
-
-    Produces [{"ticker": "...", "shares": 0, "avg_cost": entry_price}]
-    for each ticker in the allocation entries.
-    """
-    holdings: list[dict] = []
-    for entry in alloc_data.get("entries", []):
-        entry_prices = entry.get("entry_prices", {})
-        tickers = [t.strip() for t in entry.get("vehicle", "").split(",") if t.strip()]
-        for ticker in tickers:
-            holdings.append({
-                "ticker": ticker,
-                "shares": 0,
-                "avg_cost": entry_prices.get(ticker),
-            })
-    return holdings
 
 
 # ---------------------------------------------------------------------------
