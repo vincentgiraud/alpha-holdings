@@ -8,6 +8,7 @@ from typing import Optional
 
 from alpha_holdings.config import (
     MAX_THEME_PCT,
+    MAX_STOCKS_PER_THEME,
     MIN_THEMES,
     REGIME_MIN_CONFIDENCE,
     REGIME_MODIFIER,
@@ -166,7 +167,12 @@ def _select_vehicle(
     scores: list[ThemeScore],
     profile: RiskProfile,
 ) -> tuple[str, str]:
-    """Choose ETF or individual stocks, biased toward Tier 2-3 picks."""
+    """Choose ETF or individual stocks, biased toward Tier 2-3 picks.
+
+    Selects all T2-3 stocks scoring above the pool median, bounded by
+    the risk-profile max (conservative: 3, moderate: 5, aggressive: 7).
+    Minimum 2 stocks.
+    """
     if etf and etf.recommendation == ETFRecommendationType.ETF_SUFFICIENT and etf.etf_ticker:
         return etf.etf_ticker, "etf"
 
@@ -183,7 +189,19 @@ def _select_vehicle(
         )]
         # Prefer Tier 2-3 picks (the shovels); fall back to all if not enough
         pool = tier23 if len(tier23) >= 2 else scores
-        top = sorted(pool, key=lambda s: s.composite_score, reverse=True)[:3]
+        ranked = sorted(pool, key=lambda s: s.composite_score, reverse=True)
+
+        # Score-based selection: include all above median, bounded by profile max
+        max_stocks = MAX_STOCKS_PER_THEME.get(profile.appetite, 5)
+        min_stocks = 2
+        if ranked:
+            median_score = ranked[len(ranked) // 2].composite_score
+            above_median = [s for s in ranked if s.composite_score >= median_score]
+            n = max(min_stocks, min(len(above_median), max_stocks))
+        else:
+            n = min_stocks
+
+        top = ranked[:n]
         tickers = ", ".join(s.ticker for s in top)
         return tickers, "stocks"
 

@@ -34,6 +34,13 @@ MIN_THEMES: dict[RiskAppetite, int] = {
     RiskAppetite.AGGRESSIVE: 3,
 }
 
+# Max individual stocks per theme by appetite
+MAX_STOCKS_PER_THEME: dict[RiskAppetite, int] = {
+    RiskAppetite.CONSERVATIVE: 3,
+    RiskAppetite.MODERATE: 5,
+    RiskAppetite.AGGRESSIVE: 7,
+}
+
 # Regime confidence gates: minimum theme confidence to fund
 REGIME_MIN_CONFIDENCE: dict[str, int] = {
     "bull": 5,
