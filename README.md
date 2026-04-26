@@ -298,6 +298,16 @@ Two axes: appetite × time horizon.
 | Moderate | 50% thematic | 40% thematic | 30% thematic |
 | Aggressive | 75% thematic | 55% thematic | 40% thematic |
 
+Risk appetite also controls how many individual stocks are funded per theme:
+
+|  | Max stocks per theme |
+|---|---|
+| Conservative | 3 |
+| Moderate | 5 |
+| Aggressive | 7 |
+
+All T2-3 stocks scoring above the theme's median composite score are included, up to the profile maximum. Themes with more high-quality picks get more funded positions; themes with only 2-3 strong picks stay concentrated.
+
 Thesis horizon is always 3-5 years regardless of time horizon setting. Longer horizons simply allocate less to thematic bets and rely on repeated course correction.
 
 ## Macro Regime
