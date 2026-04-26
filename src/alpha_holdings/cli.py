@@ -402,11 +402,14 @@ def opportunities(fresh: bool) -> None:
         console.print("[yellow]No saved themes found. Run 'discover' first.[/yellow]")
         return
 
+    # Load latest allocation for position sizing context
+    alloc_data = _load_latest_allocation()
+
     console.rule("[bold]Opportunity Scan[/bold]")
     if fresh:
         console.print("[dim]Fetching fresh prices (bypassing cache)...[/dim]")
     opps = mon_mod.scan_opportunities(themes, skip_cache=fresh)
-    _print_opportunities(opps, actionable_only=True)
+    _print_opportunities(opps, actionable_only=True, alloc_data=alloc_data)
     console.print()
     console.print(DISCLAIMER)
 
@@ -1051,7 +1054,7 @@ def _print_rebalance_signals(signals) -> None:
             console.print(f"    To: {s.to_asset}")
 
 
-def _print_opportunities(opps, actionable_only: bool = False) -> None:
+def _print_opportunities(opps, actionable_only: bool = False, alloc_data: dict | None = None) -> None:
     if actionable_only:
         opps = [o for o in opps if o.signal_type in (
             OpportunityType.ON_SALE, OpportunityType.STABILIZED, OpportunityType.RECOVERING,
@@ -1059,6 +1062,21 @@ def _print_opportunities(opps, actionable_only: bool = False) -> None:
     if not opps:
         console.print("[dim]No opportunities detected.[/dim]")
         return
+
+    # Build ticker → allocation amount lookup from saved allocation
+    ticker_alloc: dict[str, tuple[float, float | None]] = {}  # ticker → (pct, $amount or None)
+    if alloc_data:
+        capital = alloc_data.get("capital")
+        for entry in alloc_data.get("entries", []):
+            pct = entry.get("pct_allocation", 0)
+            tickers = [t.strip() for t in entry.get("vehicle", "").split(",") if t.strip()]
+            n = max(len(tickers), 1)
+            for t in tickers:
+                per_ticker_pct = pct / n
+                per_ticker_amt = capital * per_ticker_pct / 100 if capital else None
+                ticker_alloc[t.upper()] = (per_ticker_pct, per_ticker_amt)
+
+    has_amounts = any(v[1] is not None for v in ticker_alloc.values())
 
     # Rank by attractiveness: ON_SALE > STABILIZED > RECOVERING, then by thesis confidence, then by drawdown depth
     signal_rank = {OpportunityType.ON_SALE: 0, OpportunityType.STABILIZED: 1, OpportunityType.RECOVERING: 2, OpportunityType.CAUTION: 3, OpportunityType.AVOID: 4}
@@ -1070,6 +1088,8 @@ def _print_opportunities(opps, actionable_only: bool = False) -> None:
     table.add_column("Tier", justify="center")
     table.add_column("Drawdown", justify="right")
     table.add_column("Thesis", justify="center")
+    if ticker_alloc:
+        table.add_column("Position", justify="right")
     table.add_column("Action", max_width=50)
     signal_style = {
         OpportunityType.ON_SALE: "[bold green]ON SALE[/bold green]",
@@ -1084,15 +1104,26 @@ def _print_opportunities(opps, actionable_only: bool = False) -> None:
         "tier_3_picks_and_shovels": "[green]T3[/green]",
     }
     for o in opps:
-        table.add_row(
+        row = [
             o.ticker,
             signal_style.get(o.signal_type, str(o.signal_type.value)),
             (o.theme_name or "")[:25],
             tier_display.get(o.supply_chain_tier or "", ""),
             f"{o.drawdown_pct:.1f}%" if o.drawdown_pct else "N/A",
             f"{o.thesis_confidence}/10",
-            o.recommended_action,
-        )
+        ]
+        if ticker_alloc:
+            alloc_info = ticker_alloc.get(o.ticker.upper())
+            if alloc_info:
+                pct, amt = alloc_info
+                pos_str = f"{pct:.1f}%"
+                if amt is not None:
+                    pos_str += f" (${amt:,.0f})"
+                row.append(pos_str)
+            else:
+                row.append("[dim]not funded[/dim]")
+        row.append(o.recommended_action)
+        table.add_row(*row)
     console.print(table)
 
 
@@ -1153,6 +1184,17 @@ def _print_sell_discipline(since: str) -> None:
                 pass
 
     console.print(table)
+
+
+def _load_latest_allocation() -> dict | None:
+    """Load the most recent saved allocation as a dict."""
+    path = Path("data/allocations")
+    if not path.exists():
+        return None
+    files = sorted(path.glob("*_allocation.json"), reverse=True)
+    if not files:
+        return None
+    return json.loads(files[0].read_text())
 
 
 def _save_allocation(allocation) -> None:

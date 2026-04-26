@@ -326,7 +326,7 @@ Companies must pass minimum thresholds before scoring:
 |---|---|---|
 | Market cap | ≥$500M | Excludes uninvestable micro-caps |
 | Avg daily $ volume | ≥$1M | Ensures liquidity for real positions |
-| Debt-to-equity | ≤300 (unless margin >15%) | Rejects over-leveraged companies; exempts profitable buyback-heavy firms (e.g. ORCL) |
+| Debt-to-equity | ≤300 (unless margin >15%) | Rejects over-leveraged companies; exempts profitable buyback-heavy firms |
 | Operating margin | ≥-20% | Allows cyclical dips but filters deep losses |
 | Revenue history | Must exist | Filters out pre-revenue explorers/SPACs |
 | **2-year price return** | **≥-30%** | **Rejects persistent decliners — structural issues** |
