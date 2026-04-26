@@ -185,7 +185,7 @@ Display saved data from previous runs.
 alpha-holdings show themes
 alpha-holdings show allocation
 alpha-holdings show allocation --as-holdings    # Export as holdings JSON
-alpha-holdings show allocation --as-holdings > data/my_positions.json  # Save for 'holdings --file'
+alpha-holdings show allocation --as-holdings > data/my_portfolio.json  # Save for 'holdings --file'
 ```
 
 `--as-holdings` converts the allocation into the same `[{"ticker", "shares", "avg_cost"}]` format used by `holdings --file`, using entry prices as `avg_cost`. This lets you feed one run's output into the next for overlap analysis.
@@ -326,7 +326,7 @@ Companies must pass minimum thresholds before scoring:
 |---|---|---|
 | Market cap | ≥$500M | Excludes uninvestable micro-caps |
 | Avg daily $ volume | ≥$1M | Ensures liquidity for real positions |
-| Debt-to-equity | ≤300 | Rejects over-leveraged companies |
+| Debt-to-equity | ≤300 (unless margin >15%) | Rejects over-leveraged companies; exempts profitable buyback-heavy firms (e.g. ORCL) |
 | Operating margin | ≥-20% | Allows cyclical dips but filters deep losses |
 | Revenue history | Must exist | Filters out pre-revenue explorers/SPACs |
 | **2-year price return** | **≥-30%** | **Rejects persistent decliners — structural issues** |

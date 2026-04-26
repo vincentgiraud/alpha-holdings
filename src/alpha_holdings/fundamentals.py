@@ -206,9 +206,11 @@ def passes_quality_filter(f: Fundamentals) -> tuple[bool, str]:
         if dollar_volume < MIN_AVG_DAILY_VOLUME:
             return False, f"Avg daily $ volume ${dollar_volume / 1e6:.1f}M below ${MIN_AVG_DAILY_VOLUME / 1e6:.0f}M minimum"
 
-    # Debt ceiling
+    # Debt ceiling — exempt profitable companies (high D/E from buybacks, not distress)
     if f.debt_to_equity is not None and f.debt_to_equity > QUALITY_FLOOR["max_debt_to_equity"]:
-        return False, f"Debt/equity {f.debt_to_equity:.0f} exceeds {QUALITY_FLOOR['max_debt_to_equity']} maximum"
+        margin_ok = f.operating_margin is not None and f.operating_margin > 15
+        if not margin_ok:
+            return False, f"Debt/equity {f.debt_to_equity:.0f} exceeds {QUALITY_FLOOR['max_debt_to_equity']} maximum"
 
     # Operating margin floor
     if f.operating_margin is not None and f.operating_margin < QUALITY_FLOOR["min_operating_margin"]:
