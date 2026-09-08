@@ -32,6 +32,10 @@ class PartiallyAvailableProvider:
                 drawdown_from_peak=-20.0,
                 market_cap=10_000_000_000,
                 avg_daily_volume=1_000_000,
+                revenue_growth_cagr=12,
+                gross_margin=40,
+                operating_margin=20,
+                forward_pe=20,
             )
         raise TimeoutError("market-data request timed out")
 
@@ -46,6 +50,10 @@ class PartiallyAvailableWatchlistProvider:
                 drawdown_from_peak=-5.0,
                 market_cap=10_000_000_000,
                 avg_daily_volume=1_000_000,
+                revenue_growth_cagr=12,
+                gross_margin=40,
+                operating_margin=20,
+                forward_pe=20,
             )
         raise TimeoutError("market-data request timed out")
 

@@ -240,6 +240,7 @@ CLI (click + rich)
 ### Data
 
 All data persisted to `data/` (gitignored):
+- `data/runs/` — atomic, versioned run snapshots with scores, prices, configuration, and provenance
 - `data/themes/` — discovered themes (JSON, dated)
 - `data/allocations/` — allocation snapshots for drift tracking
 - `data/cache/` — fundamentals cache (24h TTL)
@@ -280,6 +281,10 @@ Each company is scored on three dimensions:
 | **Pricing gap** | 30% | How much the market has NOT priced in the theme exposure |
 
 This weighting naturally surfaces Tier 2-3 "picks & shovels" companies — they have decent fundamentals, strong theme alignment, AND unrecognized pricing.
+
+The fundamental dimension has fixed metric weights: revenue growth 15%, ROE 10%, gross margin 10%, operating margin 15%, FCF yield 15%, forward P/E 15%, PEG 10%, and debt-to-equity 10%. A missing optional metric contributes a neutral 50 rather than causing the remaining metrics to be reweighted.
+
+AI scoring output must identify the requested ticker, keep every score within 0–100, provide all three reasonings, and include at least one HTTP(S) evidence source. Invalid output is retried once and then the candidate is rejected. Successful scores persist their model, provider, timestamp, evidence sources, and dated entry price in the versioned run snapshot, including candidates that are not selected for allocation.
 
 ### Reading the Score Display
 
@@ -346,21 +351,27 @@ Every theme maps companies into tiers:
 
 Companies must pass minimum thresholds before scoring:
 
+- `market_cap`, `current_price`, and `avg_daily_volume` are mandatory and must be positive finite values.
+- At least 4 of the 8 fixed-weight scoring metrics must be usable. Negative P/E and PEG values are economically undefined and do not count toward coverage.
+- Provider symbol, equity quote type, and company name must match the proposed candidate.
+
 | Filter | Threshold | Rationale |
 |---|---|---|
 | Market cap | ≥$500M | Excludes uninvestable micro-caps |
 | Avg daily $ volume | ≥$1M | Ensures liquidity for real positions |
 | Debt-to-equity | ≤300 (unless margin >15%) | Rejects over-leveraged companies; exempts profitable buyback-heavy firms |
 | Operating margin | ≥-20% | Allows cyclical dips but filters deep losses |
-| Revenue history | Must exist | Filters out pre-revenue explorers/SPACs |
+| Scoring coverage | ≥4 of 8 metrics | Prevents sparse records from passing through neutral defaults |
 | **2-year price return** | **≥-30%** | **Rejects persistent decliners — structural issues** |
 
-Additionally, two technical warning flags are shown (but don't reject):
+Additionally, technical warning flags are shown (but don't reject):
 - **200-DMA position** — flagged if >20% below the 200-day moving average (stock in a downtrend)
-- **Earnings revision** — flagged if forward P/E > 1.3× trailing P/E (analysts cutting estimates)
-- **Historical P/E** — flagged if current forward P/E is <70% (cheap) or >130% (expensive) of the stock's own 5-year average P/E
+- **Forward/trailing P/E ratio** — explicitly shown as a multiple comparison, not an earnings-revision series
+- **Price/current-EPS proxy** — explicitly shown as a rough proxy, not the stock's historical P/E
 
 Companies that fail these filters are removed before scoring and logged in the output.
+
+Revenue growth is annualized from the actual dates of the oldest and newest available revenue observations. The snapshot records the elapsed period; it is not labelled as a three-year CAGR unless the observations actually span three years.
 
 ## Revenue Exposure
 

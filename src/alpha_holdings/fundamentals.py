@@ -4,18 +4,41 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+import math
+import re
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Optional, Protocol
 
 import yfinance as yf
 
-from alpha_holdings.models import Fundamentals, FundamentalsResult, MarketDataStatus
+from alpha_holdings.models import (
+    Company,
+    Fundamentals,
+    FundamentalsResult,
+    MarketDataStatus,
+)
 
 log = logging.getLogger(__name__)
 
 CACHE_DIR = Path("data/cache")
 CACHE_TTL = timedelta(hours=24)
+
+# Candidates must be tradable and have at least half of the eight inputs used
+# by the fixed-weight fundamental score. Missing optional metrics receive a
+# neutral score; they never cause the remaining metrics to be reweighted.
+REQUIRED_MARKET_FIELDS = ("market_cap", "current_price", "avg_daily_volume")
+SCORING_METRIC_FIELDS = (
+    "revenue_growth_cagr",
+    "roe",
+    "gross_margin",
+    "operating_margin",
+    "fcf_yield",
+    "forward_pe",
+    "peg_ratio",
+    "debt_to_equity",
+)
+MIN_SCORING_METRICS = 4
 
 
 class FundamentalsProvider(Protocol):
@@ -65,8 +88,9 @@ def fetch(
             )
 
     log.info("Fetching fundamentals for %s...", ticker)
+    data_provider = provider or DEFAULT_PROVIDER
     try:
-        fundamentals = (provider or DEFAULT_PROVIDER).fetch(ticker)
+        fundamentals = data_provider.fetch(ticker)
     except Exception as exc:
         return _refresh_failure(
             ticker,
@@ -91,6 +115,8 @@ def fetch(
             status=MarketDataStatus.INVALID,
             reason="provider returned no market data",
         )
+    if not fundamentals.source:
+        fundamentals.source = type(data_provider).__name__
     fundamentals.fetched_at = now
     _save_cache(ticker, fundamentals, cache_dir=cache_dir)
     return FundamentalsResult(
@@ -140,17 +166,34 @@ def _fetch_yfinance(ticker: str) -> Fundamentals:
     if current and high_52 and high_52 > 0:
         drawdown = round((current - high_52) / high_52 * 100, 2)
 
-    # Revenue growth 3yr CAGR
+    # Revenue CAGR over the actual dates returned by the provider.
     revenue_growth = None
+    revenue_growth_period = None
     try:
         financials = t.financials
-        if financials is not None and len(financials.columns) >= 3:
+        if financials is not None and len(financials.columns) >= 2:
             revenues = financials.loc["Total Revenue"] if "Total Revenue" in financials.index else None
-            if revenues is not None and len(revenues) >= 3:
-                recent = revenues.iloc[0]
-                old = revenues.iloc[2]
-                if old and old > 0 and recent and recent > 0:
-                    revenue_growth = round(((recent / old) ** (1 / 3) - 1) * 100, 2)
+            if revenues is not None and len(revenues) >= 2:
+                observations = []
+                for observed_at, value in revenues.items():
+                    try:
+                        numeric_value = float(value)
+                    except (TypeError, ValueError):
+                        continue
+                    if _is_positive_finite(numeric_value):
+                        observations.append((_as_date(observed_at), numeric_value))
+                observations.sort(key=lambda item: item[0])
+                if len(observations) >= 2:
+                    oldest_date, oldest_revenue = observations[0]
+                    latest_date, latest_revenue = observations[-1]
+                    revenue_growth, revenue_growth_period = calculate_cagr(
+                        oldest_revenue,
+                        oldest_date,
+                        latest_revenue,
+                        latest_date,
+                    )
+                    revenue_growth = round(revenue_growth, 2)
+                    revenue_growth_period = round(revenue_growth_period, 2)
     except Exception:
         pass
 
@@ -159,15 +202,23 @@ def _fetch_yfinance(ticker: str) -> Fundamentals:
     pct_200dma = _compute_200dma_position(t, current)
     trailing_pe = info.get("trailingPE")
     fwd_pe = info.get("forwardPE")
-    pe_revision = round(fwd_pe / trailing_pe, 2) if fwd_pe and trailing_pe and trailing_pe > 0 else None
-    pe_vs_history = _compute_pe_vs_history(t, fwd_pe)
+    forward_to_trailing_pe = (
+        round(fwd_pe / trailing_pe, 2)
+        if fwd_pe and fwd_pe > 0 and trailing_pe and trailing_pe > 0
+        else None
+    )
+    price_history_proxy = _compute_forward_pe_price_proxy(t, fwd_pe)
 
     return Fundamentals(
         ticker=ticker,
+        provider_symbol=info.get("symbol"),
         name=info.get("shortName") or info.get("longName"),
+        quote_type=info.get("quoteType"),
+        source="yfinance",
         sector=info.get("sector"),
         market_cap=info.get("marketCap"),
-        revenue_growth_3yr_cagr=revenue_growth,
+        revenue_growth_cagr=revenue_growth,
+        revenue_growth_period_years=revenue_growth_period,
         gross_margin=_pct(info.get("grossMargins")),
         operating_margin=_pct(info.get("operatingMargins")),
         free_cash_flow=info.get("freeCashflow"),
@@ -186,8 +237,8 @@ def _fetch_yfinance(ticker: str) -> Fundamentals:
         avg_daily_volume=info.get("averageDailyVolume10Day"),
         return_2yr=return_2yr,
         pct_from_200dma=pct_200dma,
-        pe_revision_ratio=pe_revision,
-        pe_vs_own_history=pe_vs_history,
+        forward_to_trailing_pe_ratio=forward_to_trailing_pe,
+        forward_pe_vs_price_history_proxy=price_history_proxy,
     )
 
 
@@ -205,6 +256,33 @@ def _compute_2yr_return(ticker_obj) -> Optional[float]:
     return None
 
 
+def calculate_cagr(
+    start_value: float,
+    start_date: date,
+    end_value: float,
+    end_date: date,
+) -> tuple[float, float]:
+    """Return annualized percentage growth and actual elapsed years."""
+    elapsed_days = (end_date - start_date).days
+    if (
+        not _is_positive_finite(start_value)
+        or not _is_positive_finite(end_value)
+        or elapsed_days <= 0
+    ):
+        raise ValueError("CAGR requires positive values and an increasing date range")
+    elapsed_years = elapsed_days / 365.2425
+    growth = ((end_value / start_value) ** (1 / elapsed_years) - 1) * 100
+    return growth, elapsed_years
+
+
+def _as_date(value) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return datetime.fromisoformat(str(value)).date()
+
+
 def _compute_200dma_position(ticker_obj, current_price: Optional[float]) -> Optional[float]:
     """Compute % distance from 200-day moving average."""
     if not current_price:
@@ -220,11 +298,13 @@ def _compute_200dma_position(ticker_obj, current_price: Optional[float]) -> Opti
     return None
 
 
-def _compute_pe_vs_history(ticker_obj, current_forward_pe: Optional[float]) -> Optional[float]:
-    """Compare current forward P/E to the stock's historical P/E range.
+def _compute_forward_pe_price_proxy(
+    ticker_obj,
+    current_forward_pe: Optional[float],
+) -> Optional[float]:
+    """Compare forward P/E with historical price divided by current EPS.
 
-    Returns current forward P/E as a percentage of the 5yr average trailing P/E.
-    <80 = cheap vs own history, >120 = expensive vs own history.
+    This is explicitly a price/current-EPS proxy, not a historical P/E series.
     """
     if not current_forward_pe or current_forward_pe <= 0:
         return None
@@ -270,12 +350,114 @@ def _compute_fcf_yield(info: dict) -> Optional[float]:
 # Quality filter
 # ---------------------------------------------------------------------------
 
-def passes_quality_filter(f: Fundamentals) -> tuple[bool, str]:
+_COMPANY_NAME_STOPWORDS = {
+    "class",
+    "company",
+    "corp",
+    "corporation",
+    "group",
+    "holding",
+    "holdings",
+    "inc",
+    "limited",
+    "ltd",
+    "plc",
+    "sa",
+    "the",
+}
+
+
+def validate_company_identity(
+    company: Company,
+    fundamentals: Fundamentals,
+) -> tuple[bool, str]:
+    """Verify provider symbol/type/name metadata against the proposed company."""
+    expected_symbol = company.full_ticker.strip().upper()
+    fundamentals_symbol = fundamentals.ticker.strip().upper()
+    if fundamentals_symbol != expected_symbol:
+        return False, (
+            f"fundamentals ticker '{fundamentals_symbol}' does not match "
+            f"'{expected_symbol}'"
+        )
+    provider_symbol = (fundamentals.provider_symbol or "").strip().upper()
+    if not provider_symbol:
+        return False, "provider did not report symbol identity"
+    if provider_symbol != expected_symbol:
+        return False, (
+            f"provider symbol '{provider_symbol}' does not match '{expected_symbol}'"
+        )
+    quote_type = (fundamentals.quote_type or "").strip().upper()
+    if quote_type not in {"EQUITY", "STOCK"}:
+        shown = quote_type or "missing"
+        return False, f"provider quote type '{shown}' is not an equity"
+    if not fundamentals.name:
+        return False, "provider did not report company identity"
+    if not _company_names_match(company.name, fundamentals.name):
+        return False, (
+            f"provider name '{fundamentals.name}' does not match '{company.name}'"
+        )
+    return True, "OK"
+
+
+def _company_names_match(expected: str, actual: str) -> bool:
+    expected_tokens = _company_name_tokens(expected)
+    actual_tokens = _company_name_tokens(actual)
+    if not expected_tokens or not actual_tokens:
+        return False
+    if expected_tokens[0] == actual_tokens[0]:
+        return True
+    if len(set(expected_tokens) & set(actual_tokens)) >= 2:
+        return True
+    expected_compact = "".join(expected_tokens)
+    actual_compact = "".join(actual_tokens)
+    if expected_compact in actual_compact or actual_compact in expected_compact:
+        return True
+    expected_acronym = "".join(token[0] for token in expected_tokens)
+    actual_acronym = "".join(token[0] for token in actual_tokens)
+    return expected_compact == actual_acronym or actual_compact == expected_acronym
+
+
+def _company_name_tokens(value: str) -> list[str]:
+    return [
+        token
+        for token in re.findall(r"[a-z0-9]+", value.lower())
+        if token not in _COMPANY_NAME_STOPWORDS
+    ]
+
+
+def passes_quality_filter(
+    observation: Fundamentals | FundamentalsResult,
+) -> tuple[bool, str]:
     """Check if a company meets minimum quality thresholds.
     
     Returns (passes, reason) where reason explains rejection.
     """
     from alpha_holdings.config import MIN_MARKET_CAP, MIN_AVG_DAILY_VOLUME, QUALITY_FLOOR
+
+    if isinstance(observation, FundamentalsResult):
+        if observation.data is None:
+            detail = f": {observation.reason}" if observation.reason else ""
+            return False, f"Market data {observation.status.value}{detail}"
+        f = observation.data
+    else:
+        f = observation
+
+    missing_required = [
+        field
+        for field in REQUIRED_MARKET_FIELDS
+        if not _is_positive_finite(getattr(f, field))
+    ]
+    available_metrics = sum(
+        _is_usable_scoring_metric(field, getattr(f, field))
+        for field in SCORING_METRIC_FIELDS
+    )
+    if missing_required or available_metrics < MIN_SCORING_METRICS:
+        missing_summary = ", ".join(missing_required) if missing_required else "none"
+        return False, (
+            f"Incomplete fundamentals: missing required {missing_summary}; "
+            f"{available_metrics}/{len(SCORING_METRIC_FIELDS)} scoring metrics "
+            f"available (minimum {MIN_SCORING_METRICS})"
+        )
 
     # Market cap floor
     if f.market_cap is not None and f.market_cap < MIN_MARKET_CAP:
@@ -299,7 +481,7 @@ def passes_quality_filter(f: Fundamentals) -> tuple[bool, str]:
 
     # Must have revenue (market cap as proxy — pre-revenue SPACs/explorers often have tiny market cap)
     if QUALITY_FLOOR["require_revenue"] and f.market_cap is not None and f.market_cap < 100_000_000:
-        if f.revenue_growth_3yr_cagr is None and f.gross_margin is None:
+        if f.revenue_growth_cagr is None and f.gross_margin is None:
             return False, "Appears pre-revenue with no financial history"
 
     # 2-year price momentum: reject persistent decliners
@@ -307,6 +489,22 @@ def passes_quality_filter(f: Fundamentals) -> tuple[bool, str]:
         return False, f"2-year return {f.return_2yr:.0f}% — persistent decline suggests structural issues"
 
     return True, "OK"
+
+
+def _is_positive_finite(value) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and math.isfinite(value)
+        and value > 0
+    )
+
+
+def _is_usable_scoring_metric(field: str, value) -> bool:
+    if not isinstance(value, (int, float)) or not math.isfinite(value):
+        return False
+    if field in {"forward_pe", "peg_ratio"}:
+        return value > 0
+    return True
 
 
 def get_technical_flags(f: Fundamentals) -> list[str]:
@@ -317,16 +515,30 @@ def get_technical_flags(f: Fundamentals) -> list[str]:
     if f.pct_from_200dma is not None and f.pct_from_200dma < -20:
         flags.append(f"📉 {f.pct_from_200dma:.0f}% below 200-DMA — downtrend")
 
-    # Earnings revision: estimates being cut
-    if f.pe_revision_ratio is not None and f.pe_revision_ratio > 1.3:
-        flags.append(f"⚠ Forward P/E > trailing P/E (ratio {f.pe_revision_ratio:.1f}x) — estimates may be getting cut")
+    # Forward/trailing P/E comparison (not a revision series)
+    if (
+        f.forward_to_trailing_pe_ratio is not None
+        and f.forward_to_trailing_pe_ratio > 1.3
+    ):
+        flags.append(
+            "⚠ Forward/trailing P/E ratio "
+            f"{f.forward_to_trailing_pe_ratio:.1f}x — not a direct "
+            "earnings-revision measure"
+        )
 
-    # Historical P/E comparison
-    if f.pe_vs_own_history is not None:
-        if f.pe_vs_own_history < 70:
-            flags.append(f"🏷️ P/E at {f.pe_vs_own_history:.0f}% of 5yr avg — cheap vs own history")
-        elif f.pe_vs_own_history > 130:
-            flags.append(f"💰 P/E at {f.pe_vs_own_history:.0f}% of 5yr avg — expensive vs own history")
+    # Historical-price/current-EPS proxy (not a historical multiple series)
+    proxy = f.forward_pe_vs_price_history_proxy
+    if proxy is not None:
+        if proxy < 70:
+            flags.append(
+                f"🏷️ Forward P/E is {proxy:.0f}% of the price/current-EPS "
+                "proxy — not historical P/E"
+            )
+        elif proxy > 130:
+            flags.append(
+                f"💰 Forward P/E is {proxy:.0f}% of the price/current-EPS "
+                "proxy — not historical P/E"
+            )
 
     return flags
 
@@ -348,7 +560,15 @@ def _as_utc(value: datetime) -> datetime:
 
 def _has_market_data(fundamentals: Fundamentals) -> bool:
     values = fundamentals.model_dump(
-        exclude={"ticker", "fetched_at"},
+        exclude={
+            "ticker",
+            "provider_symbol",
+            "name",
+            "quote_type",
+            "source",
+            "sector",
+            "fetched_at",
+        },
         exclude_none=True,
     )
     return any(value not in ([], {}) for value in values.values())

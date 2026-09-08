@@ -24,6 +24,17 @@ class EmptyProvider:
         return Fundamentals(ticker=ticker)
 
 
+class IdentityOnlyProvider:
+    def fetch(self, ticker: str) -> Fundamentals:
+        return Fundamentals(
+            ticker=ticker,
+            provider_symbol=ticker,
+            name="Identity Only Corporation",
+            quote_type="EQUITY",
+            source="fixture",
+        )
+
+
 class MixedProvider:
     def fetch(self, ticker: str) -> Fundamentals:
         if ticker == "GOOD":
@@ -46,6 +57,7 @@ def test_fetch_returns_an_available_timestamped_observation(tmp_path) -> None:
         ticker="ACME",
         current_price=125.0,
         high_52w=150.0,
+        source="SuccessfulProvider",
         fetched_at=now,
     )
     assert result.observed_at == now
@@ -195,6 +207,18 @@ def test_fetch_marks_empty_provider_payload_as_invalid(tmp_path) -> None:
     assert result.as_of is None
     assert result.reason == "provider returned no market data"
     assert not list(tmp_path.iterdir())
+
+
+def test_fetch_marks_identity_only_payload_as_invalid(tmp_path) -> None:
+    result = fundamentals.fetch(
+        "EMPTY",
+        provider=IdentityOnlyProvider(),
+        clock=lambda: datetime(2026, 9, 8, 9, 30, tzinfo=timezone.utc),
+        cache_dir=tmp_path,
+    )
+
+    assert result.status is MarketDataStatus.INVALID
+    assert result.reason == "provider returned no market data"
 
 
 def test_fetch_batch_preserves_each_tickers_explicit_outcome(tmp_path) -> None:

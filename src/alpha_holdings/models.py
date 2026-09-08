@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Any, ClassVar, Optional, Union
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -227,10 +227,21 @@ class ThemeDependency(BaseModel):
 
 class Fundamentals(BaseModel):
     ticker: str
+    provider_symbol: Optional[str] = None
     name: Optional[str] = None
+    quote_type: Optional[str] = None
+    source: Optional[str] = None
     sector: Optional[str] = None
     market_cap: Optional[float] = None
-    revenue_growth_3yr_cagr: Optional[float] = None
+    revenue_growth_cagr: Optional[float] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "revenue_growth_cagr",
+            "revenue_growth_3yr_cagr",
+        ),
+        description="Annualized revenue growth over the reported observation span.",
+    )
+    revenue_growth_period_years: Optional[float] = Field(default=None, gt=0)
     gross_margin: Optional[float] = None
     operating_margin: Optional[float] = None
     free_cash_flow: Optional[float] = None
@@ -254,9 +265,41 @@ class Fundamentals(BaseModel):
     # Technical indicators
     return_2yr: Optional[float] = Field(default=None, description="2-year price return %")
     pct_from_200dma: Optional[float] = Field(default=None, description="% distance from 200-day moving average")
-    pe_revision_ratio: Optional[float] = Field(default=None, description="forward_pe / trailing_pe. >1 = estimates cut, <1 = estimates rising")
-    pe_vs_own_history: Optional[float] = Field(default=None, description="Current forward P/E as % of 5yr avg forward P/E. <80 = cheap vs self, >120 = expensive vs self")
+    forward_to_trailing_pe_ratio: Optional[float] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "forward_to_trailing_pe_ratio",
+            "pe_revision_ratio",
+        ),
+        description="Forward P/E divided by trailing P/E; not an earnings-revision measure.",
+    )
+    forward_pe_vs_price_history_proxy: Optional[float] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "forward_pe_vs_price_history_proxy",
+            "pe_vs_own_history",
+        ),
+        description=(
+            "Forward P/E as a percentage of average historical price divided by "
+            "current EPS; not historical P/E."
+        ),
+    )
     fetched_at: Optional[datetime] = None
+
+    @property
+    def revenue_growth_3yr_cagr(self) -> Optional[float]:
+        """Compatibility accessor for snapshots written before the metric rename."""
+        return self.revenue_growth_cagr
+
+    @property
+    def pe_revision_ratio(self) -> Optional[float]:
+        """Compatibility accessor for snapshots written before the metric rename."""
+        return self.forward_to_trailing_pe_ratio
+
+    @property
+    def pe_vs_own_history(self) -> Optional[float]:
+        """Compatibility accessor for snapshots written before the metric rename."""
+        return self.forward_pe_vs_price_history_proxy
 
 
 class FundamentalsResult(BaseModel):
@@ -313,12 +356,17 @@ class ThemeScore(BaseModel):
     fundamental_score: float = Field(ge=0, le=100)
     thesis_alignment_score: float = Field(ge=0, le=100)
     pricing_gap_score: float = Field(ge=0, le=100)
+    revenue_exposure_score: Optional[float] = Field(default=None, ge=0, le=100)
     composite_score: float = Field(ge=0, le=100)
     valuation: Optional[ValuationContext] = None
     entry_method: EntryMethod = EntryMethod.DCA
     alignment_reasoning: Optional[str] = None
     pricing_gap_reasoning: Optional[str] = None
     revenue_exposure_reasoning: Optional[str] = None
+    score_as_of: Optional[datetime] = None
+    evidence_sources: list[str] = Field(default_factory=list)
+    scoring_provider: Optional[str] = None
+    scoring_model: Optional[str] = None
 
 
 class OpportunitySignal(BaseModel):

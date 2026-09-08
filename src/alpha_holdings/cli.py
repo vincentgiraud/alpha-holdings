@@ -237,45 +237,42 @@ def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str
     for t in themes:
         all_tickers.extend(c.full_ticker for c in t.all_companies)
     fund_results = fund_mod.fetch_batch(list(set(all_tickers)))
-    fund_data = {ticker: result.data for ticker, result in fund_results.items() if result.data is not None}
-    if fund_results and not fund_data:
+    available_fund_data = {
+        ticker: result.data
+        for ticker, result in fund_results.items()
+        if result.data is not None
+    }
+    if fund_results and not available_fund_data:
         failed = ", ".join(sorted(fund_results))
         raise click.ClickException(f"Analysis unavailable: no usable market data for {failed}.")
     _print_market_data_issues(fund_results)
-    console.print(f"Fetched fundamentals for {len(fund_data)} tickers.")
-
-    # Step 3b: Quality filter — remove companies that fail minimum thresholds
-    filtered_count = 0
-    for t in themes:
-        for sub in t.sub_themes:
-            original = len(sub.companies)
-            kept = []
-            for c in sub.companies:
-                f = fund_data.get(c.full_ticker)
-                if f:
-                    passes, reason = fund_mod.passes_quality_filter(f)
-                    if passes:
-                        kept.append(c)
-                    else:
-                        console.print(f"  [dim]Filtered out {c.full_ticker} ({c.name}): {reason}[/dim]")
-                        filtered_count += 1
-                else:
-                    kept.append(c)  # keep if no data — score with defaults
-            sub.companies = kept
-    if filtered_count:
-        console.print(f"[yellow]Filtered {filtered_count} companies below quality thresholds.[/yellow]")
+    console.print(f"Fetched fundamentals for {len(available_fund_data)} tickers.")
 
     # Step 4: Scoring
     console.rule("[bold]Step 4: Scoring Companies[/bold]")
-    scores: dict[str, list] = {}
-    for t in themes:
-        theme_scores = []
-        for c in t.all_companies:
-            f = fund_data.get(c.full_ticker)
-            if f:
-                s = score_mod.score_company(c, t, f, all_fundamentals=fund_data)
-                theme_scores.append(s)
-        scores[t.name] = theme_scores
+    scoring_result = score_mod.score_candidates(
+        themes,
+        fund_results,
+        clock=fund_mod.DEFAULT_CLOCK,
+    )
+    themes = scoring_result.themes
+    scores = scoring_result.scores
+    for ticker, reason in sorted(scoring_result.rejections.items()):
+        console.print(f"  [dim]Rejected {ticker}: {reason}[/dim]")
+    scored_tickers = {
+        score.ticker
+        for theme_scores in scores.values()
+        for score in theme_scores
+    }
+    if not scored_tickers:
+        raise click.ClickException(
+            "Analysis unavailable: no candidate passed data, identity, and scoring validation."
+        )
+    fund_data = {
+        ticker: result.data
+        for ticker, result in fund_results.items()
+        if ticker.upper() in scored_tickers and result.data is not None
+    }
 
     # Step 5: ETF mapping
     console.rule("[bold]Step 5: ETF Mapping[/bold]")
@@ -298,7 +295,32 @@ def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str
         _print_supply_chain_tree(t, scores.get(t.name, []), fund_data, etf_recs.get(t.name), base_currency=base_currency.upper())
     _print_allocation(allocation)
 
-    # Save
+    # Atomically publish the coherent run before compatibility files.
+    from alpha_holdings import llm as llm_mod
+    from alpha_holdings.snapshots import (
+        RunSnapshotRepository,
+        build_discovery_snapshot,
+    )
+
+    snapshot = build_discovery_snapshot(
+        themes=themes,
+        scores=scores,
+        market_data=fund_results,
+        allocation=allocation,
+        created_at=fund_mod.DEFAULT_CLOCK(),
+        model_configuration={
+            "scoring_model": llm_mod.get_model(mini=True),
+            "scoring_reasoning_effort": llm_mod.get_reasoning_effort(),
+            "scoring_weights": score_mod.SCORING_WEIGHTS,
+            "fundamental_metric_weights": score_mod.FUNDAMENTAL_METRIC_WEIGHTS,
+            "required_market_fields": list(fund_mod.REQUIRED_MARKET_FIELDS),
+            "minimum_scoring_metrics": fund_mod.MIN_SCORING_METRICS,
+        },
+    )
+    RunSnapshotRepository().save(snapshot)
+    console.print(f"[dim]Saved versioned run {snapshot.run_id}.[/dim]")
+
+    # Legacy dual-write remains until the expand-contract migration completes.
     theme_mod.save_themes(themes)
     _save_allocation(allocation)
     _save_scores(scores)
