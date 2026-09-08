@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import re
 import sys
+from datetime import date, datetime
 from pathlib import Path
 
 import click
@@ -17,6 +20,7 @@ from rich.text import Text
 from alpha_holdings.models import (
     EntryMethod,
     MacroRegimeType,
+    MarketDataStatus,
     OpportunityType,
     RiskAppetite,
     RiskProfile,
@@ -26,6 +30,113 @@ from alpha_holdings.models import (
 )
 
 console = Console()
+
+
+class PositiveFiniteFloat(click.ParamType):
+    """A finite floating-point value greater than zero."""
+
+    name = "positive finite float"
+
+    def convert(self, value, param, ctx):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            self.fail(f"{value!r} is not a valid number", param, ctx)
+        if not math.isfinite(number) or number <= 0:
+            self.fail("must be finite and greater than zero", param, ctx)
+        return number
+
+
+POSITIVE_FINITE_FLOAT = PositiveFiniteFloat()
+
+SUPPORTED_BASE_CURRENCIES = frozenset({
+    "AUD", "BRL", "CAD", "CHF", "CNY", "DKK", "EUR", "GBP", "HKD", "INR",
+    "JPY", "KRW", "MXN", "NOK", "SEK", "TWD", "USD",
+})
+
+
+class SupportedCurrency(click.ParamType):
+    """A base currency understood by the engine's exchange map."""
+
+    name = "currency"
+
+    def convert(self, value, param, ctx):
+        currency = str(value).upper()
+        if currency not in SUPPORTED_BASE_CURRENCIES:
+            self.fail("must be a supported ISO currency code", param, ctx)
+        return currency
+
+
+SUPPORTED_CURRENCY = SupportedCurrency()
+
+
+class ScoreThreshold(click.ParamType):
+    """A finite score on the engine's inclusive 0–100 scale."""
+
+    name = "score"
+
+    def convert(self, value, param, ctx):
+        try:
+            score = float(value)
+        except (TypeError, ValueError):
+            self.fail(f"{value!r} is not a valid number", param, ctx)
+        if not math.isfinite(score) or not 0 <= score <= 100:
+            self.fail("must be finite and between 0 and 100", param, ctx)
+        return score
+
+
+SCORE_THRESHOLD = ScoreThreshold()
+
+
+class HistoricalDate(click.ParamType):
+    """A real YYYYMMDD date that is no later than today."""
+
+    name = "YYYYMMDD"
+
+    def convert(self, value, param, ctx):
+        raw = str(value)
+        if not re.fullmatch(r"[0-9]{8}", raw):
+            self.fail("must be a valid date in YYYYMMDD format", param, ctx)
+        try:
+            parsed = datetime.strptime(raw, "%Y%m%d").date()
+        except ValueError:
+            self.fail("must be a valid date in YYYYMMDD format", param, ctx)
+        if parsed > date.today():
+            self.fail("must not be in the future", param, ctx)
+        return raw
+
+
+HISTORICAL_DATE = HistoricalDate()
+
+
+class TickerSymbol(click.ParamType):
+    """A structurally valid Yahoo-style ticker symbol."""
+
+    name = "ticker"
+
+    def convert(self, value, param, ctx):
+        ticker = str(value)
+        valid = re.fullmatch(
+            r"\^?[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*(?:=[A-Za-z0-9]+)?",
+            ticker,
+        )
+        if not valid or len(ticker) > 32:
+            self.fail("must be a non-empty, valid ticker symbol", param, ctx)
+        return ticker
+
+
+TICKER_SYMBOL = TickerSymbol()
+
+
+class OrderedDateRangeCommand(click.Command):
+    """Validate a backtest date range before invoking engine-owning code."""
+
+    def invoke(self, ctx: click.Context):
+        from_date = ctx.params.get("from_date")
+        to_date = ctx.params.get("to_date")
+        if from_date and to_date and to_date < from_date:
+            ctx.fail("--to must not be before --from")
+        return super().invoke(ctx)
 
 DISCLAIMER = (
     "[dim italic]NOT FINANCIAL ADVICE — this is an AI-assisted research tool. "
@@ -88,8 +199,8 @@ def cli(ctx: click.Context, verbose: bool, debug: bool) -> None:
     help="Investment time horizon.",
 )
 @click.option("--focus", multiple=True, help="Optional focus areas to bias discovery.")
-@click.option("--base-currency", default="USD", help="Your base currency (for FX risk flags).")
-@click.option("--capital", type=float, default=None, help="Total capital to invest (shows $ amounts in allocation).")
+@click.option("--base-currency", type=SUPPORTED_CURRENCY, default="USD", help="Your base currency (for FX risk flags).")
+@click.option("--capital", type=POSITIVE_FINITE_FLOAT, default=None, help="Total capital to invest (shows $ amounts in allocation).")
 def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str, capital: float | None) -> None:
     """Full pipeline: signals → themes → fundamentals → scoring → allocation."""
     from alpha_holdings import allocation as alloc_mod
@@ -125,7 +236,12 @@ def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str
     all_tickers = []
     for t in themes:
         all_tickers.extend(c.full_ticker for c in t.all_companies)
-    fund_data = fund_mod.fetch_batch(list(set(all_tickers)))
+    fund_results = fund_mod.fetch_batch(list(set(all_tickers)))
+    fund_data = {ticker: result.data for ticker, result in fund_results.items() if result.data is not None}
+    if fund_results and not fund_data:
+        failed = ", ".join(sorted(fund_results))
+        raise click.ClickException(f"Analysis unavailable: no usable market data for {failed}.")
+    _print_market_data_issues(fund_results)
     console.print(f"Fetched fundamentals for {len(fund_data)} tickers.")
 
     # Step 3b: Quality filter — remove companies that fail minimum thresholds
@@ -339,7 +455,7 @@ def explain(theme_filter: str | None, tier: str | None) -> None:
 
 @cli.command()
 @click.option("--theme", default=None, help="Re-evaluate a specific theme only.")
-@click.option("--since", default=None, help="Date of allocation to track returns from (YYYYMMDD).")
+@click.option("--since", type=HISTORICAL_DATE, default=None, help="Date of allocation to track returns from (YYYYMMDD).")
 def monitor(theme: str | None, since: str | None) -> None:
     """Course correction: re-evaluate saved themes against fresh signals."""
     from alpha_holdings import monitor as mon_mod
@@ -378,8 +494,9 @@ def monitor(theme: str | None, since: str | None) -> None:
 
     # Opportunity scan
     console.rule("[bold]Opportunity Scan[/bold]")
-    opps = mon_mod.scan_opportunities(themes)
-    _print_opportunities(opps)
+    scan = mon_mod.scan_opportunities(themes)
+    _print_market_data_issues(scan.market_data)
+    _print_opportunities(scan.signals, incomplete=scan.incomplete)
 
     # Sell discipline: track returns from a saved allocation
     if since:
@@ -408,8 +525,17 @@ def opportunities(fresh: bool) -> None:
     console.rule("[bold]Opportunity Scan[/bold]")
     if fresh:
         console.print("[dim]Fetching fresh prices (bypassing cache)...[/dim]")
-    opps = mon_mod.scan_opportunities(themes, skip_cache=fresh)
-    _print_opportunities(opps, actionable_only=True, alloc_data=alloc_data)
+    scan = mon_mod.scan_opportunities(themes, skip_cache=fresh)
+    if scan.market_data and scan.usable_count == 0:
+        failed = ", ".join(sorted(scan.market_data))
+        raise click.ClickException(f"Analysis unavailable: no usable market data for {failed}.")
+    _print_market_data_issues(scan.market_data)
+    _print_opportunities(
+        scan.signals,
+        actionable_only=True,
+        alloc_data=alloc_data,
+        incomplete=scan.incomplete,
+    )
     console.print()
     console.print(DISCLAIMER)
 
@@ -417,7 +543,7 @@ def opportunities(fresh: bool) -> None:
 @cli.command()
 @click.option("--theme", "theme_filter", default=None, help="Filter to a specific theme.")
 @click.option("--tier", type=click.Choice(["1", "2", "3"]), default=None, help="Filter to a supply chain tier.")
-@click.option("--min-score", type=float, default=60.0, help="Minimum composite score (default: 60).")
+@click.option("--min-score", type=SCORE_THRESHOLD, default=60.0, help="Minimum composite score (default: 60).")
 def watchlist(theme_filter: str | None, tier: str | None, min_score: float) -> None:
     """High-scoring companies not yet on sale — your buy-the-dip watchlist."""
     import re
@@ -456,6 +582,7 @@ def watchlist(theme_filter: str | None, tier: str | None, min_score: float) -> N
     }
 
     rows = []
+    market_data = {}
     for theme in themes:
         theme_scores = {s["ticker"]: s for s in scores.get(theme.name, [])}
         for company in theme.all_companies:
@@ -470,22 +597,23 @@ def watchlist(theme_filter: str | None, tier: str | None, min_score: float) -> N
                 continue
 
             # Check if this ticker already has an opportunity signal
-            try:
-                f = fetch(ticker)
-                passes, _ = passes_quality_filter(f)
-                if not passes:
-                    continue
-                opp = detect_opportunity(
-                    ticker, theme.confidence_score, f,
-                    theme_name=theme.name,
-                    supply_chain_tier=company.supply_chain_tier.value,
-                )
-                # Skip if it already has an actionable or warning signal
-                if opp:
-                    continue
-                drawdown = f.drawdown_from_peak
-            except Exception:
-                drawdown = None
+            observation = fetch(ticker)
+            market_data[ticker] = observation
+            f = observation.data
+            if f is None:
+                continue
+            passes, _ = passes_quality_filter(f)
+            if not passes:
+                continue
+            opp = detect_opportunity(
+                ticker, theme.confidence_score, f,
+                theme_name=theme.name,
+                supply_chain_tier=company.supply_chain_tier.value,
+            )
+            # Skip if it already has an actionable or warning signal
+            if opp:
+                continue
+            drawdown = f.drawdown_from_peak
 
             rows.append((
                 ticker, composite,
@@ -494,8 +622,21 @@ def watchlist(theme_filter: str | None, tier: str | None, min_score: float) -> N
                 theme.name, company.supply_chain_tier.value, drawdown,
             ))
 
+    usable_count = sum(result.data is not None for result in market_data.values())
+    if market_data and usable_count == 0:
+        failed = ", ".join(sorted(market_data))
+        raise click.ClickException(f"Analysis unavailable: no usable market data for {failed}.")
+    incomplete = any(
+        result.status is not MarketDataStatus.AVAILABLE
+        for result in market_data.values()
+    )
+    _print_market_data_issues(market_data)
+
     if not rows:
-        console.print("[dim]No watchlist candidates found (all high-scorers already have opportunity signals or are below threshold).[/dim]")
+        if incomplete:
+            console.print("[dim]No watchlist candidates found among analyzed instruments; analysis is incomplete.[/dim]")
+        else:
+            console.print("[dim]No watchlist candidates found (all high-scorers already have opportunity signals or are below threshold).[/dim]")
         console.print()
         console.print(DISCLAIMER)
         return
@@ -531,10 +672,10 @@ def watchlist(theme_filter: str | None, tier: str | None, min_score: float) -> N
     console.print(DISCLAIMER)
 
 
-@cli.command()
-@click.option("--from", "from_date", default=None, help="Start date YYYYMMDD (default: earliest allocation).")
-@click.option("--to", "to_date", default=None, help="End date YYYYMMDD (default: today).")
-@click.option("--benchmark", default="SPY", help="Benchmark ticker (default: SPY).")
+@cli.command(cls=OrderedDateRangeCommand)
+@click.option("--from", "from_date", type=HISTORICAL_DATE, default=None, help="Start date YYYYMMDD (default: earliest allocation).")
+@click.option("--to", "to_date", type=HISTORICAL_DATE, default=None, help="End date YYYYMMDD (default: today).")
+@click.option("--benchmark", type=TICKER_SYMBOL, default="SPY", help="Benchmark ticker (default: SPY).")
 @click.option("--validate", is_flag=True, default=False, help="Run score validation analysis (do scores predict returns?).")
 def backtest(from_date: str | None, to_date: str | None, benchmark: str, validate: bool) -> None:
     """Track record: compare historical allocations vs benchmark, validate scores."""
@@ -804,23 +945,33 @@ def show(what: str) -> None:
     """Display saved themes or allocation data."""
     if what == "themes":
         from alpha_holdings import themes as theme_mod
+        from alpha_holdings.snapshots import RunSnapshotRepository
 
-        themes = theme_mod.load_latest_themes()
+        snapshot = RunSnapshotRepository().load_latest()
+        themes = snapshot.themes if snapshot is not None else theme_mod.load_latest_themes()
         if themes:
             _print_themes(themes)
         else:
             console.print("[yellow]No saved themes.[/yellow]")
     elif what == "allocation":
-        path = Path("data/allocations")
-        if path.exists():
-            files = sorted(path.glob("*.json"), reverse=True)
-            if files:
-                data = json.loads(files[0].read_text())
-                console.print_json(json.dumps(data, indent=2))
-            else:
-                console.print("[yellow]No saved allocations.[/yellow]")
-        else:
+        from alpha_holdings.models import SnapshotSourceFormat
+        from alpha_holdings.snapshots import RunSnapshotRepository
+
+        snapshot = RunSnapshotRepository().load_latest()
+        if snapshot is None:
             console.print("[yellow]No saved allocations.[/yellow]")
+        elif snapshot.completeness.source_format is SnapshotSourceFormat.LEGACY:
+            data = snapshot.allocation.model_dump(mode="json")
+            console.print_json(json.dumps(data, indent=2))
+        else:
+            data = {
+                "run_id": snapshot.run_id,
+                "schema_version": snapshot.schema_version,
+                "completeness": snapshot.completeness.model_dump(mode="json"),
+                "allocation": snapshot.allocation.model_dump(mode="json"),
+                "positions": [position.model_dump(mode="json") for position in snapshot.positions],
+            }
+            console.print_json(json.dumps(data, indent=2))
     console.print()
     console.print(DISCLAIMER)
 
@@ -1029,13 +1180,38 @@ def _print_rebalance_signals(signals) -> None:
             console.print(f"    To: {s.to_asset}")
 
 
-def _print_opportunities(opps, actionable_only: bool = False, alloc_data: dict | None = None) -> None:
+def _print_market_data_issues(market_data: dict) -> None:
+    issues = [
+        result
+        for result in market_data.values()
+        if result.status is not MarketDataStatus.AVAILABLE
+    ]
+    if not issues:
+        return
+    details = []
+    for result in sorted(issues, key=lambda item: item.ticker):
+        detail = f"{result.ticker} ({result.status.value}"
+        if result.as_of:
+            detail += f", as of {result.as_of.isoformat()}"
+        details.append(detail + ")")
+    console.print(f"[yellow]Partial analysis — market data issues: {', '.join(details)}.[/yellow]")
+
+
+def _print_opportunities(
+    opps,
+    actionable_only: bool = False,
+    alloc_data: dict | None = None,
+    incomplete: bool = False,
+) -> None:
     if actionable_only:
         opps = [o for o in opps if o.signal_type in (
             OpportunityType.ON_SALE, OpportunityType.STABILIZED, OpportunityType.RECOVERING,
         )]
     if not opps:
-        console.print("[dim]No opportunities detected.[/dim]")
+        if incomplete:
+            console.print("[dim]No opportunities detected among analyzed instruments; analysis is incomplete.[/dim]")
+        else:
+            console.print("[dim]No opportunities detected.[/dim]")
         return
 
     # Build ticker → allocation amount lookup from saved allocation
@@ -1132,7 +1308,10 @@ def _print_sell_discipline(since: str) -> None:
             if not ep or ep <= 0:
                 continue
             try:
-                f = fetch(ticker)
+                observation = fetch(ticker)
+                f = observation.data
+                if f is None:
+                    continue
                 cp = f.current_price
                 if not cp:
                     continue

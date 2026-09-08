@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional, Protocol
 
 import yfinance as yf
 
-from alpha_holdings.models import Fundamentals
+from alpha_holdings.models import Fundamentals, FundamentalsResult, MarketDataStatus
 
 log = logging.getLogger(__name__)
 
@@ -18,29 +18,110 @@ CACHE_DIR = Path("data/cache")
 CACHE_TTL = timedelta(hours=24)
 
 
-def fetch(ticker: str, *, skip_cache: bool = False) -> Fundamentals:
+class FundamentalsProvider(Protocol):
+    """External provider boundary used by the fundamentals fetcher."""
+
+    def fetch(self, ticker: str) -> Fundamentals: ...
+
+
+class YahooFinanceProvider:
+    def fetch(self, ticker: str) -> Fundamentals:
+        return _fetch_yfinance(ticker)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+DEFAULT_PROVIDER: FundamentalsProvider = YahooFinanceProvider()
+DEFAULT_CLOCK: Callable[[], datetime] = _utc_now
+
+
+def fetch(
+    ticker: str,
+    *,
+    skip_cache: bool = False,
+    provider: FundamentalsProvider | None = None,
+    clock: Callable[[], datetime] | None = None,
+    cache_dir: Path = CACHE_DIR,
+) -> FundamentalsResult:
     """Fetch fundamentals for a single ticker, using cache if fresh."""
-    if not skip_cache:
-        cached = _load_cache(ticker)
-        if cached:
-            return cached
+    now = _as_utc((clock or DEFAULT_CLOCK)())
+    cached = None if skip_cache else _load_cache(ticker, cache_dir=cache_dir)
+    if cached is not None and not _has_market_data(cached):
+        cached = None
+    if cached and cached.fetched_at:
+        as_of = _as_utc(cached.fetched_at)
+        age = max((now - as_of).total_seconds(), 0.0)
+        if age <= CACHE_TTL.total_seconds():
+            return FundamentalsResult(
+                ticker=ticker,
+                status=MarketDataStatus.AVAILABLE,
+                data=cached,
+                observed_at=now,
+                as_of=as_of,
+                from_cache=True,
+                age=age,
+            )
 
     log.info("Fetching fundamentals for %s...", ticker)
-    fundamentals = _fetch_yfinance(ticker)
-    fundamentals.fetched_at = datetime.utcnow()
-    _save_cache(ticker, fundamentals)
-    return fundamentals
+    try:
+        fundamentals = (provider or DEFAULT_PROVIDER).fetch(ticker)
+    except Exception as exc:
+        return _refresh_failure(
+            ticker,
+            now=now,
+            cached=cached,
+            status=MarketDataStatus.UNAVAILABLE,
+            reason=str(exc),
+        )
+    if not isinstance(fundamentals, Fundamentals):
+        return _refresh_failure(
+            ticker,
+            now=now,
+            cached=cached,
+            status=MarketDataStatus.INVALID,
+            reason="provider returned an invalid payload",
+        )
+    if not _has_market_data(fundamentals):
+        return _refresh_failure(
+            ticker,
+            now=now,
+            cached=cached,
+            status=MarketDataStatus.INVALID,
+            reason="provider returned no market data",
+        )
+    fundamentals.fetched_at = now
+    _save_cache(ticker, fundamentals, cache_dir=cache_dir)
+    return FundamentalsResult(
+        ticker=ticker,
+        status=MarketDataStatus.AVAILABLE,
+        data=fundamentals,
+        observed_at=now,
+        as_of=now,
+        from_cache=False,
+        age=0.0,
+    )
 
 
-def fetch_batch(tickers: list[str]) -> dict[str, Fundamentals]:
+def fetch_batch(
+    tickers: list[str],
+    *,
+    skip_cache: bool = False,
+    provider: FundamentalsProvider | None = None,
+    clock: Callable[[], datetime] | None = None,
+    cache_dir: Path = CACHE_DIR,
+) -> dict[str, FundamentalsResult]:
     """Fetch fundamentals for a list of tickers."""
-    results = {}
+    results: dict[str, FundamentalsResult] = {}
     for t in tickers:
-        try:
-            results[t] = fetch(t)
-        except Exception as exc:
-            log.warning("Failed to fetch %s: %s", t, exc)
-            results[t] = Fundamentals(ticker=t)
+        results[t] = fetch(
+            t,
+            skip_cache=skip_cache,
+            provider=provider,
+            clock=clock,
+            cache_dir=cache_dir,
+        )
     return results
 
 
@@ -51,7 +132,7 @@ def _fetch_yfinance(ticker: str) -> Fundamentals:
         info = t.info or {}
     except Exception as exc:
         log.warning("yfinance error for %s: %s", ticker, exc)
-        return Fundamentals(ticker=ticker)
+        raise
 
     current = info.get("regularMarketPrice") or info.get("currentPrice")
     high_52 = info.get("fiftyTwoWeekHigh")
@@ -254,28 +335,65 @@ def get_technical_flags(f: Fundamentals) -> list[str]:
 # Cache
 # ---------------------------------------------------------------------------
 
-def _cache_path(ticker: str) -> Path:
+def _cache_path(ticker: str, *, cache_dir: Path = CACHE_DIR) -> Path:
     safe = ticker.replace("/", "_").replace(".", "_")
-    return CACHE_DIR / f"{safe}.json"
+    return cache_dir / f"{safe}.json"
 
 
-def _load_cache(ticker: str) -> Optional[Fundamentals]:
-    path = _cache_path(ticker)
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _has_market_data(fundamentals: Fundamentals) -> bool:
+    values = fundamentals.model_dump(
+        exclude={"ticker", "fetched_at"},
+        exclude_none=True,
+    )
+    return any(value not in ([], {}) for value in values.values())
+
+
+def _refresh_failure(
+    ticker: str,
+    *,
+    now: datetime,
+    cached: Fundamentals | None,
+    status: MarketDataStatus,
+    reason: str,
+) -> FundamentalsResult:
+    if cached and cached.fetched_at:
+        as_of = _as_utc(cached.fetched_at)
+        return FundamentalsResult(
+            ticker=ticker,
+            status=MarketDataStatus.STALE,
+            data=cached,
+            observed_at=now,
+            as_of=as_of,
+            from_cache=True,
+            age=max((now - as_of).total_seconds(), 0.0),
+            reason=reason,
+        )
+    return FundamentalsResult(
+        ticker=ticker,
+        status=status,
+        observed_at=now,
+        reason=reason,
+    )
+
+
+def _load_cache(ticker: str, *, cache_dir: Path = CACHE_DIR) -> Optional[Fundamentals]:
+    path = _cache_path(ticker, cache_dir=cache_dir)
     if not path.exists():
         return None
     try:
         data = json.loads(path.read_text())
-        fetched = data.get("fetched_at")
-        if fetched:
-            fetched_dt = datetime.fromisoformat(fetched)
-            if datetime.utcnow() - fetched_dt > CACHE_TTL:
-                return None
         return Fundamentals(**data)
     except Exception:
         return None
 
 
-def _save_cache(ticker: str, f: Fundamentals) -> None:
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    path = _cache_path(ticker)
+def _save_cache(ticker: str, f: Fundamentals, *, cache_dir: Path = CACHE_DIR) -> None:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    path = _cache_path(ticker, cache_dir=cache_dir)
     path.write_text(f.model_dump_json(indent=2))

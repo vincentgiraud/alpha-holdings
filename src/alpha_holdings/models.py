@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from enum import Enum
-from typing import Optional, Union
+from typing import Any, ClassVar, Optional, Union
+from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -45,6 +46,13 @@ class OpportunityType(str, Enum):
     AVOID = "avoid"
 
 
+class MarketDataStatus(str, Enum):
+    AVAILABLE = "available"
+    STALE = "stale"
+    UNAVAILABLE = "unavailable"
+    INVALID = "invalid"
+
+
 class ThesisStatus(str, Enum):
     STRENGTHENED = "strengthened"
     UNCHANGED = "unchanged"
@@ -81,6 +89,27 @@ class EntryMethod(str, Enum):
     LUMP_SUM = "lump_sum"
     DCA = "dca"
     WAIT = "wait"
+
+
+class InstrumentType(str, Enum):
+    STOCK = "stock"
+    ETF = "etf"
+    FUND = "fund"
+    BOND = "bond"
+    COMMODITY = "commodity"
+    CASH = "cash"
+
+
+class PortfolioSleeve(str, Enum):
+    THEMATIC = "thematic"
+    CORE = "core"
+    DEFENSIVE = "defensive"
+    CASH = "cash"
+
+
+class SnapshotSourceFormat(str, Enum):
+    VERSIONED = "versioned"
+    LEGACY = "legacy"
 
 
 class ETFRecommendationType(str, Enum):
@@ -230,6 +259,45 @@ class Fundamentals(BaseModel):
     fetched_at: Optional[datetime] = None
 
 
+class FundamentalsResult(BaseModel):
+    """A timestamped market-data observation, including failure outcomes."""
+
+    ticker: str
+    status: MarketDataStatus
+    data: Optional[Fundamentals] = None
+    observed_at: datetime
+    as_of: Optional[datetime] = None
+    from_cache: bool = False
+    age: Optional[float] = Field(
+        default=None,
+        ge=0,
+        description="Age of the underlying observation in seconds.",
+    )
+    reason: Optional[str] = None
+
+    @field_validator("ticker")
+    @classmethod
+    def _normalize_ticker(cls, value: str) -> str:
+        value = value.strip().upper()
+        if not value:
+            raise ValueError("ticker must not be empty")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_outcome(self):
+        has_observation = self.data is not None and self.as_of is not None and self.age is not None
+        if self.status in (MarketDataStatus.AVAILABLE, MarketDataStatus.STALE):
+            if not has_observation:
+                raise ValueError(f"{self.status.value} market data requires data, as_of, and age")
+        elif self.data is not None or self.as_of is not None or self.age is not None:
+            raise ValueError(f"{self.status.value} market data cannot contain an observation")
+        if self.status is MarketDataStatus.STALE and not self.from_cache:
+            raise ValueError("stale market data must come from cache")
+        if self.status in (MarketDataStatus.UNAVAILABLE, MarketDataStatus.INVALID) and self.from_cache:
+            raise ValueError(f"{self.status.value} market data cannot come from cache")
+        return self
+
+
 # ---------------------------------------------------------------------------
 # Scoring & valuation
 # ---------------------------------------------------------------------------
@@ -303,6 +371,81 @@ class AllocationEntry(BaseModel):
     )
 
 
+class InstrumentPosition(BaseModel):
+    """A concrete portfolio position with an explicit percentage-point weight."""
+
+    ticker: str
+    instrument_type: InstrumentType
+    sleeve: PortfolioSleeve
+    weight_pct: float = Field(ge=0, le=100)
+    currency: str
+    entry_price: float = Field(gt=0)
+    price_timestamp: datetime
+
+    @field_validator("ticker")
+    @classmethod
+    def _normalize_ticker(cls, value: str) -> str:
+        value = value.strip().upper()
+        if not value:
+            raise ValueError("ticker must not be empty")
+        return value
+
+    @field_validator("currency")
+    @classmethod
+    def _normalize_currency(cls, value: str) -> str:
+        value = value.strip().upper()
+        if len(value) != 3 or not value.isalpha():
+            raise ValueError("currency must be a three-letter ISO code")
+        return value
+
+class InstrumentMetadata(BaseModel):
+    ticker: str
+    instrument_type: InstrumentType
+    currency: str
+    name: Optional[str] = None
+    exchange: Optional[str] = None
+
+    @field_validator("ticker")
+    @classmethod
+    def _normalize_ticker(cls, value: str) -> str:
+        value = value.strip().upper()
+        if not value:
+            raise ValueError("ticker must not be empty")
+        return value
+
+    @field_validator("currency")
+    @classmethod
+    def _normalize_currency(cls, value: str) -> str:
+        value = value.strip().upper()
+        if len(value) != 3 or not value.isalpha():
+            raise ValueError("currency must be a three-letter ISO code")
+        return value
+
+
+class InstrumentPrice(BaseModel):
+    ticker: str
+    price: float = Field(gt=0)
+    currency: str
+    observed_at: datetime
+    source: Optional[str] = None
+
+    @field_validator("ticker")
+    @classmethod
+    def _normalize_ticker(cls, value: str) -> str:
+        value = value.strip().upper()
+        if not value:
+            raise ValueError("ticker must not be empty")
+        return value
+
+    @field_validator("currency")
+    @classmethod
+    def _normalize_currency(cls, value: str) -> str:
+        value = value.strip().upper()
+        if len(value) != 3 or not value.isalpha():
+            raise ValueError("currency must be a three-letter ISO code")
+        return value
+
+
 class PortfolioAllocation(BaseModel):
     risk_profile: RiskProfile
     macro_regime: MacroRegime
@@ -319,6 +462,86 @@ class PortfolioAllocation(BaseModel):
         description="Total capital to invest, if provided via --capital.",
     )
     generated_at: Optional[datetime] = None
+
+
+RUN_SNAPSHOT_SECTIONS = (
+    "themes",
+    "candidate_scores",
+    "instrument_metadata",
+    "prices",
+    "positions",
+    "allocation",
+    "model_configuration",
+    "provenance",
+)
+
+
+class SnapshotCompleteness(BaseModel):
+    source_format: SnapshotSourceFormat
+    is_complete: bool
+    available_sections: list[str] = Field(default_factory=list)
+    missing_sections: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_complete_state(self):
+        available = self.available_sections
+        missing = self.missing_sections
+        if len(available) != len(set(available)) or len(missing) != len(set(missing)):
+            raise ValueError("snapshot sections cannot contain duplicates")
+        available_set = set(available)
+        missing_set = set(missing)
+        known = set(RUN_SNAPSHOT_SECTIONS)
+        unknown = (available_set | missing_set) - known
+        if unknown:
+            raise ValueError("unknown snapshot sections: " + ", ".join(sorted(unknown)))
+        overlap = available_set & missing_set
+        if overlap:
+            raise ValueError(
+                "snapshot sections cannot be both available and missing: "
+                + ", ".join(sorted(overlap))
+            )
+        if available_set | missing_set != known:
+            raise ValueError("snapshot completeness must classify every section")
+        if self.is_complete != (not missing):
+            raise ValueError("is_complete must agree with the missing sections")
+        return self
+
+
+class RunSnapshot(BaseModel):
+    """One coherent and independently loadable investment-research run."""
+
+    SECTIONS: ClassVar[tuple[str, ...]] = RUN_SNAPSHOT_SECTIONS
+
+    schema_version: int = Field(default=1, ge=1)
+    run_id: str = Field(default="", pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    themes: list[ThemeThesis] = Field(default_factory=list)
+    candidate_scores: dict[str, list[ThemeScore]] = Field(default_factory=dict)
+    instrument_metadata: dict[str, InstrumentMetadata] = Field(default_factory=dict)
+    prices: dict[str, InstrumentPrice] = Field(default_factory=dict)
+    positions: list[InstrumentPosition] = Field(default_factory=list)
+    allocation: PortfolioAllocation
+    model_configuration: dict[str, Any] = Field(default_factory=dict)
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    completeness: SnapshotCompleteness = Field(
+        default_factory=lambda: SnapshotCompleteness(
+            source_format=SnapshotSourceFormat.VERSIONED,
+            is_complete=True,
+            available_sections=list(RUN_SNAPSHOT_SECTIONS),
+        )
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _assign_run_id(cls, data):
+        if not isinstance(data, dict) or data.get("run_id"):
+            return data
+        created_at = data.get("created_at") or datetime.now(UTC)
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        data = dict(data)
+        data["run_id"] = f"{created_at.strftime('%Y%m%dT%H%M%S%f')}-{uuid4().hex}"
+        return data
 
 
 # ---------------------------------------------------------------------------

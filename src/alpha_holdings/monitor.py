@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from alpha_holdings import llm
 from alpha_holdings.fundamentals import fetch
 from alpha_holdings.models import (
     Fundamentals,
+    FundamentalsResult,
     MacroSignal,
+    MarketDataStatus,
     OpportunitySignal,
     RebalanceAction,
     RebalanceSignal,
@@ -24,6 +27,23 @@ from alpha_holdings.scoring import detect_opportunity
 from alpha_holdings.signals import _extract_json
 
 log = logging.getLogger(__name__)
+
+
+@dataclass
+class OpportunityScanResult:
+    signals: list[OpportunitySignal] = field(default_factory=list)
+    market_data: dict[str, FundamentalsResult] = field(default_factory=dict)
+
+    @property
+    def incomplete(self) -> bool:
+        return any(
+            result.status is not MarketDataStatus.AVAILABLE
+            for result in self.market_data.values()
+        )
+
+    @property
+    def usable_count(self) -> int:
+        return sum(result.data is not None for result in self.market_data.values())
 
 
 def check_thesis(theme: ThemeThesis) -> ThesisUpdate:
@@ -100,29 +120,30 @@ def generate_rebalance_signals(
     return signals
 
 
-def scan_opportunities(themes: list[ThemeThesis], *, skip_cache: bool = False) -> list[OpportunitySignal]:
+def scan_opportunities(themes: list[ThemeThesis], *, skip_cache: bool = False) -> OpportunityScanResult:
     """Scan all funded themes for dip opportunities, filtering out low-quality companies."""
     from alpha_holdings.fundamentals import passes_quality_filter
 
-    opportunities: list[OpportunitySignal] = []
+    scan = OpportunityScanResult()
     for theme in themes:
         for company in theme.all_companies:
-            try:
-                f = fetch(company.full_ticker, skip_cache=skip_cache)
-                # Skip companies that fail quality filters
-                passes, reason = passes_quality_filter(f)
-                if not passes:
-                    log.debug("Skipping %s in opportunity scan: %s", company.full_ticker, reason)
-                    continue
-                opp = detect_opportunity(
-                    company.full_ticker,
-                    theme.confidence_score,
-                    f,
-                    theme_name=theme.name,
-                    supply_chain_tier=company.supply_chain_tier.value,
-                )
-                if opp:
-                    opportunities.append(opp)
-            except Exception as exc:
-                log.debug("Opportunity scan failed for %s: %s", company.full_ticker, exc)
-    return opportunities
+            observation = fetch(company.full_ticker, skip_cache=skip_cache)
+            scan.market_data[company.full_ticker] = observation
+            f = observation.data
+            if f is None:
+                continue
+            # Skip companies that fail quality filters
+            passes, reason = passes_quality_filter(f)
+            if not passes:
+                log.debug("Skipping %s in opportunity scan: %s", company.full_ticker, reason)
+                continue
+            opp = detect_opportunity(
+                company.full_ticker,
+                theme.confidence_score,
+                f,
+                theme_name=theme.name,
+                supply_chain_tier=company.supply_chain_tier.value,
+            )
+            if opp:
+                scan.signals.append(opp)
+    return scan
