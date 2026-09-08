@@ -15,11 +15,11 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
 # 2. Configure
-cp .env.example .env
-# Edit .env with your Azure OpenAI endpoint (Entra ID auth — no API key needed)
+cp example.env .env
+# Confirm the Codex CLI settings in .env
 
-# 3. Login to Azure (for Entra ID authentication)
-az login
+# 3. Login with the ChatGPT account used by your Plus plan
+codex login
 
 # 4. Run discovery
 alpha-holdings discover --risk moderate --horizon 3-5yr
@@ -28,20 +28,28 @@ alpha-holdings discover --risk moderate --horizon 3-5yr
 ## Prerequisites
 
 - **Python 3.11+**
-- **Azure CLI** — `az login` for Entra ID authentication
-- **Azure OpenAI** — gpt-5.4 and gpt-5.4-mini deployed on Microsoft Foundry
-  - Uses the Responses API with `web_search` tool for real-time grounding
-  - No API key needed — authenticates via `DefaultAzureCredential`
+- **Codex CLI** — install the CLI and authenticate with `codex login`
+- **ChatGPT Plus** — the CLI uses the signed-in ChatGPT account; no API key is required
+- **Codex web search** — enabled for discovery, macro research, and ETF lookups
 
 ## Environment Variables
 
 | Variable | Required | Description |
 |---|---|---|
-| `AZURE_OPENAI_BASE_URL` | Yes | Foundry endpoint URL (e.g., `https://<your-resource>.services.ai.azure.com/api/projects/<your-project>/openai/v1/`) |
-| `AZURE_OPENAI_MODEL` | Yes | Primary model deployment name (e.g., `gpt-5.4`) |
-| `AZURE_OPENAI_MODEL_MINI` | Yes | Lightweight model deployment name (e.g., `gpt-5.4-mini`) |
+| `CODEX_CLI_COMMAND` | No | Codex executable and optional fixed arguments (default: `codex`) |
+| `CODEX_CLI_TIMEOUT` | No | Timeout in seconds for one CLI call (default: `600`) |
+| `CODEX_MODEL` | No | Model passed to Codex CLI (default: `gpt-5.6-luna`) |
+| `CODEX_REASONING_EFFORT` | No | Reasoning effort passed as `model_reasoning_effort` (default: `xhigh`) |
 
-See [.env.example](.env.example) for the template.
+`CODEX_CLI_TIMEOUT` applies to each individual Codex request. The 600-second
+default allows full web-grounded `discover` calls to finish at `xhigh`. Lower it
+for short calls when faster failure is more important than completion:
+
+```bash
+CODEX_CLI_TIMEOUT=120 alpha-holdings discover --risk moderate --horizon 3-5yr
+```
+
+See [example.env](example.env) for the template. `.env.example` contains the same settings for compatibility.
 
 ## CLI Commands
 
@@ -201,9 +209,9 @@ alpha-holdings -v discover ...   # Verbose/debug logging
 
 ```
 CLI (click + rich)
-  → Signal Collector (Responses API + web_search tool)
+  → Signal Collector (Codex CLI + web search)
     → Macro regime assessment (bull/neutral/bear)
-  → Theme Discovery (gpt-5.4 with web search, tiered supply chain mapping)
+  → Theme Discovery (configured Codex model with web search, tiered supply chain mapping)
     → Theme dependency mapping (cross-theme causal chains)
   → Fundamentals Fetcher (yfinance, global exchanges)
   → Scoring Engine (40% fundamental + 30% thesis alignment + 30% pricing gap)
@@ -217,7 +225,7 @@ CLI (click + rich)
 | Module | Purpose |
 |---|---|
 | `cli.py` | Click CLI + rich terminal output |
-| `llm.py` | Azure OpenAI client, Responses API, Entra ID auth |
+| `llm.py` | Codex CLI client, model/effort configuration, retry handling |
 | `models.py` | All Pydantic data models |
 | `config.py` | Risk matrix, scoring weights, regime gates |
 | `signals.py` | Macro signal collection via agentic web search |
@@ -288,6 +296,11 @@ NVDA (USD) (22x fwd P/E) [64/F:55/T:72†/P:68†] ⚡ DCA
 - `⚡ DCA` / `🟢 lump sum` / `🔴 wait` — entry timing recommendation
 - `(USD)` — trading currency. `⚠ FX` appears for non-base currencies.
 - `[exotic]` / `[check broker]` — broker accessibility warning for non-standard exchanges.
+
+In the `explain` command output, additional AI-estimated reasonings are shown:
+- `T†` — thesis alignment reasoning
+- `P†` — pricing gap reasoning
+- `R†` — revenue exposure reasoning (0-100 scale: 100 = pure-play theme revenue)
 
 ## Risk Profiles
 

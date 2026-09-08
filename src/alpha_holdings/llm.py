@@ -1,18 +1,19 @@
-"""Azure OpenAI client via Microsoft Foundry with Entra ID auth."""
+"""Codex CLI client using the user's ChatGPT account."""
 
 from __future__ import annotations
 
 import json
-import os
-import time
 import logging
+import os
+import shlex
+import subprocess
+import time
+from dataclasses import dataclass
 from datetime import datetime
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from openai import OpenAI
 
 load_dotenv()
 
@@ -24,85 +25,213 @@ _debug_counter = 0
 _MAX_RETRIES = 5
 _RETRY_BASE_DELAY = 2  # seconds
 
+DEFAULT_CODEX_CLI_COMMAND = "codex"
+DEFAULT_CODEX_CLI_TIMEOUT = 600
+DEFAULT_CODEX_MODEL = "gpt-5.6-luna"
+DEFAULT_CODEX_REASONING_EFFORT = "xhigh"
 
-@lru_cache(maxsize=1)
-def _get_token_provider():
-    from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 
-    return get_bearer_token_provider(
-        DefaultAzureCredential(), "https://ai.azure.com/.default"
+@dataclass(frozen=True)
+class CodexResponse:
+    """Small response object matching the fields used by the debug logger."""
+
+    output_text: str
+    output: tuple[Any, ...] = ()
+
+
+class CodexCLIError(RuntimeError):
+    """Raised when the Codex CLI cannot produce a response."""
+
+    def __init__(self, message: str, *, retryable: bool = True) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+
+
+def get_cli_command() -> list[str]:
+    """Return the configured Codex executable and any fixed arguments."""
+    raw_command = os.environ.get(
+        "CODEX_CLI_COMMAND", DEFAULT_CODEX_CLI_COMMAND
+    ).strip()
+    if not raw_command:
+        raise ValueError("CODEX_CLI_COMMAND cannot be empty")
+    return shlex.split(raw_command)
+
+
+def get_cli_timeout() -> int:
+    """Return the maximum duration for one Codex CLI invocation."""
+    raw_timeout = os.environ.get(
+        "CODEX_CLI_TIMEOUT", str(DEFAULT_CODEX_CLI_TIMEOUT)
     )
-
-
-@lru_cache(maxsize=1)
-def get_client() -> OpenAI:
-    base_url = os.environ["AZURE_OPENAI_BASE_URL"]
-    return OpenAI(base_url=base_url, api_key=_get_token_provider())
+    try:
+        timeout = int(raw_timeout)
+    except ValueError as exc:
+        raise ValueError("CODEX_CLI_TIMEOUT must be a positive integer") from exc
+    if timeout <= 0:
+        raise ValueError("CODEX_CLI_TIMEOUT must be a positive integer")
+    return timeout
 
 
 def get_model(mini: bool = False) -> str:
-    if mini:
-        return os.environ.get("AZURE_OPENAI_MODEL_MINI", "gpt-5.4-mini-1")
-    return os.environ.get("AZURE_OPENAI_MODEL", "gpt-5.4-1")
+    """Return the configured Codex model.
+
+    ``mini`` remains part of the function signature for callers that use the
+    lightweight request path. The Codex CLI uses the same configured model for
+    every request.
+    """
+    del mini
+    return os.environ.get("CODEX_MODEL", DEFAULT_CODEX_MODEL)
 
 
-def _get_retry_after(exc: Exception) -> int | None:
-    """Extract Retry-After seconds from a rate-limit (429) exception."""
-    from openai import RateLimitError
-
-    if isinstance(exc, RateLimitError):
-        # openai SDK exposes response headers
-        headers = getattr(getattr(exc, "response", None), "headers", {})
-        retry_after = headers.get("retry-after") or headers.get("Retry-After")
-        if retry_after:
-            try:
-                return int(float(retry_after))
-            except (ValueError, TypeError):
-                pass
-        return 10  # default 10s for 429 without Retry-After header
-    return None
+def get_reasoning_effort(reasoning: str | None = None) -> str:
+    """Return a per-call override or the configured default effort."""
+    return reasoning or os.environ.get(
+        "CODEX_REASONING_EFFORT", DEFAULT_CODEX_REASONING_EFFORT
+    )
 
 
-def _debug_dump_response(prompt: str, kwargs: dict, response: Any) -> None:
+def _build_command(
+    *, model: str, reasoning: str, web_search: bool
+) -> list[str]:
+    """Build a safe argv list for a non-interactive Codex request."""
+    command = get_cli_command()
+    # `--search` is a global Codex option and must precede the `exec`
+    # subcommand in the currently supported CLI versions.
+    if web_search:
+        command.append("--search")
+    command.extend(
+        [
+            "exec",
+            "--ephemeral",
+            "--sandbox",
+            "read-only",
+            "--model",
+            model,
+            "--config",
+            f"model_reasoning_effort={json.dumps(reasoning)}",
+            "--color",
+            "never",
+        ]
+    )
+    # A lone '-' makes codex exec read the prompt from stdin.
+    command.append("-")
+    return command
+
+
+def _prepare_prompt(
+    prompt: str,
+    *,
+    domain_filter: list[str] | None,
+    structured: dict | None,
+) -> str:
+    """Preserve request constraints that the CLI cannot pass as API fields."""
+    additions: list[str] = []
+    if domain_filter:
+        domains = ", ".join(domain_filter)
+        additions.append(
+            "When using web search, prefer and restrict sources to these domains: "
+            f"{domains}."
+        )
+    if structured:
+        additions.append(
+            "Return output conforming to this JSON schema/configuration: "
+            + json.dumps(structured, sort_keys=True)
+        )
+    if not additions:
+        return prompt
+    return prompt.rstrip() + "\n\n" + "\n".join(additions)
+
+
+def _run_codex(
+    prompt: str,
+    *,
+    model: str,
+    reasoning: str,
+    web_search: bool,
+) -> CodexResponse:
+    """Run one Codex CLI request and return its final text response."""
+    command = _build_command(
+        model=model, reasoning=reasoning, web_search=web_search
+    )
+    log.debug("Running Codex CLI: %s", shlex.join(command[:-1]) + " -")
+
+    try:
+        completed = subprocess.run(
+            command,
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=get_cli_timeout(),
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        executable = command[0] if command else DEFAULT_CODEX_CLI_COMMAND
+        raise CodexCLIError(
+            f"Codex CLI executable not found: {executable}. "
+            "Install Codex CLI or set CODEX_CLI_COMMAND.",
+            retryable=False,
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        timeout = get_cli_timeout()
+        raise CodexCLIError(
+            f"Codex CLI timed out after {timeout} seconds."
+        ) from exc
+    except OSError as exc:
+        raise CodexCLIError(f"Unable to start Codex CLI: {exc}", retryable=False) from exc
+
+    if completed.returncode != 0:
+        details = completed.stderr.strip() or completed.stdout.strip()
+        if len(details) > 1000:
+            details = details[-1000:]
+        suffix = f": {details}" if details else ""
+        raise CodexCLIError(
+            f"Codex CLI exited with status {completed.returncode}{suffix}"
+        )
+
+    output = completed.stdout.strip()
+    if not output:
+        raise CodexCLIError("Codex CLI returned an empty response.")
+    return CodexResponse(output_text=output)
+
+
+def _debug_dump_response(prompt: str, kwargs: dict, response: CodexResponse) -> None:
     """Log debug info inline and save to data/debug/ when DEBUG_DUMP is enabled."""
     if not DEBUG_DUMP:
         return
     global _debug_counter
     _debug_counter += 1
 
-    output_text = getattr(response, "output_text", None) or ""
+    output_text = response.output_text
     model = kwargs.get("model", "?")
-    tools = [str(t.get("type", "?")) for t in kwargs.get("tools", [])]
-    n_items = len(getattr(response, "output", []))
+    tools = ["web_search"] if kwargs.get("web_search") else []
+    n_items = len(response.output)
 
-    # Inline CLI trace
     tools_str = f" +{','.join(tools)}" if tools else ""
     prompt_short = prompt[:80].replace("\n", " ")
     output_short = output_text[:120].replace("\n", " ") if output_text else "<empty>"
     log.info(
         "[DEBUG #%03d] %s%s | prompt: %s... | output: %d chars, %d items | %s...",
-        _debug_counter, model, tools_str, prompt_short, len(output_text), n_items, output_short,
+        _debug_counter,
+        model,
+        tools_str,
+        prompt_short,
+        len(output_text),
+        n_items,
+        output_short,
     )
 
-    # Also save to file for post-mortem
     debug_dir = Path("data/debug")
     debug_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.utcnow().strftime("%H%M%S")
     filename = debug_dir / f"{ts}_{_debug_counter:03d}.json"
 
-    output_items = []
-    for item in getattr(response, "output", []):
-        output_items.append(str(item)[:500])
-
     dump = {
         "timestamp": datetime.utcnow().isoformat(),
         "model": model,
-        "tools": [str(t) for t in kwargs.get("tools", [])],
+        "tools": tools,
         "prompt_preview": prompt[:300],
         "output_text_preview": output_text[:1000],
         "output_text_length": len(output_text),
         "output_items_count": n_items,
-        "output_items_preview": output_items[:5],
     }
     filename.write_text(json.dumps(dump, indent=2, default=str))
 
@@ -115,70 +244,49 @@ def respond(
     domain_filter: list[str] | None = None,
     structured: dict | None = None,
     reasoning: str | None = None,
-) -> Any:
-    """Call the Responses API with optional web search and structured output.
-
-    Args:
-        prompt: The user input / instruction.
-        mini: Use the lightweight model.
-        web_search: Enable the web_search tool for real-time grounding.
-        domain_filter: Restrict web search to these domains.
-        structured: If provided, pass as `text` format for structured output.
-        reasoning: Reasoning effort level: 'minimal', 'low', 'medium', 'high'. None = model default.
-
-    Returns:
-        The response object from the Responses API.
-    """
-    client = get_client()
+) -> CodexResponse:
+    """Call the Codex CLI with optional web search and output constraints."""
+    effective_prompt = _prepare_prompt(
+        prompt,
+        domain_filter=domain_filter if web_search else None,
+        structured=structured,
+    )
     model = get_model(mini=mini)
+    effort = get_reasoning_effort(reasoning)
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "reasoning": effort,
+        "web_search": web_search,
+    }
 
-    kwargs: dict[str, Any] = {"model": model, "input": prompt}
-
-    if reasoning:
-        kwargs["reasoning"] = {"effort": reasoning, "summary": "auto"}
-
-    if web_search:
-        tool: dict[str, Any] = {"type": "web_search"}
-        if domain_filter:
-            tool["filters"] = {"allowed_domains": domain_filter}
-        kwargs["tools"] = [tool]
-
-    if structured:
-        kwargs["text"] = structured
-
-    last_exc: Exception | None = None
+    last_exc: CodexCLIError | None = None
     for attempt in range(_MAX_RETRIES):
         try:
-            response = client.responses.create(**kwargs)
-            _debug_dump_response(prompt, kwargs, response)
+            response = _run_codex(
+                effective_prompt,
+                model=model,
+                reasoning=effort,
+                web_search=web_search,
+            )
+            _debug_dump_response(effective_prompt, kwargs, response)
             return response
-        except Exception as exc:
+        except CodexCLIError as exc:
             last_exc = exc
-            # Check for rate limit (429) with Retry-After header
-            retry_after = _get_retry_after(exc)
-            if retry_after is not None:
-                delay = max(retry_after, 1)
-                log.warning(
-                    "Rate limited (429) on attempt %d/%d. Waiting %ds (Retry-After)...",
-                    attempt + 1,
-                    _MAX_RETRIES,
-                    delay,
-                )
-            else:
-                delay = _RETRY_BASE_DELAY * (2**attempt)
-                log.warning(
-                    "Responses API call failed (attempt %d/%d): %s. Retrying in %ds...",
-                    attempt + 1,
-                    _MAX_RETRIES,
-                    exc,
-                    delay,
-                )
+            if not exc.retryable or attempt >= _MAX_RETRIES - 1:
+                break
+            delay = _RETRY_BASE_DELAY * (2**attempt)
+            log.warning(
+                "Codex CLI call failed (attempt %d/%d): %s. Retrying in %ds...",
+                attempt + 1,
+                _MAX_RETRIES,
+                exc,
+                delay,
+            )
+            time.sleep(delay)
 
-            if attempt < _MAX_RETRIES - 1:
-                time.sleep(delay)
-            else:
-                log.error("Responses API call failed after %d attempts.", _MAX_RETRIES)
-    raise last_exc  # type: ignore[misc]
+    assert last_exc is not None
+    log.error("Codex CLI call failed after %d attempts.", attempt + 1)
+    raise last_exc
 
 
 def respond_text(
@@ -190,31 +298,10 @@ def respond_text(
     reasoning: str | None = None,
 ) -> str:
     """Convenience wrapper that returns just the output text."""
-    response = respond(
+    return respond(
         prompt,
         mini=mini,
         web_search=web_search,
         domain_filter=domain_filter,
         reasoning=reasoning,
-    )
-
-    # Log reasoning summary if present
-    if reasoning:
-        for item in getattr(response, "output", []):
-            if getattr(item, "type", None) == "reasoning":
-                for block in getattr(item, "summary", []):
-                    if hasattr(block, "text") and block.text:
-                        log.info("Reasoning summary: %s", block.text[:500])
-
-    text = response.output_text
-    if not text:
-        # output_text can be None if the response only has tool calls
-        # Try to extract from the output items directly
-        for item in getattr(response, "output", []):
-            if hasattr(item, "content"):
-                for block in item.content:
-                    if hasattr(block, "text") and block.text:
-                        return block.text
-        log.warning("Response had no output_text. Returning empty string.")
-        return ""
-    return text
+    ).output_text

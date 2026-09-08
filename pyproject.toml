@@ -4,8 +4,6 @@ version = "0.1.0"
 description = "Autonomous thematic investment research tool"
 requires-python = ">=3.11"
 dependencies = [
-    "openai>=1.82.0",
-    "azure-identity>=1.19.0",
     "yfinance>=0.2.50",
     "pandas>=2.2.0",
     "pydantic>=2.10.0",

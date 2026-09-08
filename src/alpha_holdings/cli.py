@@ -176,7 +176,7 @@ def cli(ctx: click.Context, verbose: bool, debug: bool) -> None:
 
     # Silence noisy third-party loggers — only show at DEBUG (-v)
     if not verbose:
-        for noisy in ("azure", "httpx", "httpcore", "urllib3", "openai._base_client"):
+        for noisy in ("httpx", "httpcore", "urllib3"):
             logging.getLogger(noisy).setLevel(logging.WARNING)
 
     if debug:
