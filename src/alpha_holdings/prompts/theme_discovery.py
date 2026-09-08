@@ -51,6 +51,7 @@ Return a JSON array of themes, each with:
     - "ticker": stock ticker symbol
     - "exchange_suffix": exchange suffix if non-US (e.g. "L" for London, "PA" for Paris, \
 "T" for Tokyo, "TW" for Taiwan, "KS" for Korea, "AX" for Australia, "TO" for Toronto) or null for US
+    - "issuer_id": canonical legal issuer name shared by all of its listings and share classes
     - "name": company name
     - "role_in_theme": specific role in the supply chain
     - "rationale": why this company specifically (not generic)
@@ -116,6 +117,7 @@ Return a JSON array of additional companies to add. Each entry:
 - "companies": array of companies, each with:
     - "ticker": stock ticker
     - "exchange_suffix": exchange suffix or null for US
+    - "issuer_id": canonical legal issuer name shared by all of its listings and share classes
     - "name": company name
     - "role_in_theme": specific role
     - "rationale": why this company fills a gap

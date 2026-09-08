@@ -22,11 +22,14 @@ from alpha_holdings.models import (
     EntryMethod,
     Fundamentals,
     FundamentalsResult,
+    InstrumentPosition,
+    InstrumentType,
     MarketCapCategory,
     MarketDataStatus,
     MacroRegime,
     MacroRegimeType,
     PortfolioAllocation,
+    PortfolioSleeve,
     RiskAppetite,
     RiskProfile,
     SubTheme,
@@ -497,6 +500,16 @@ def test_discovery_snapshot_keeps_prices_for_the_full_scored_cohort(tmp_path) ->
         )
         for ticker, data in {"ACME": acme, "BETA": beta}.items()
     }
+    core = _complete_fundamentals("VT", "Vanguard Total World Stock ETF", 100)
+    core.quote_type = "ETF"
+    market_data["VT"] = FundamentalsResult(
+        ticker="VT",
+        status=MarketDataStatus.AVAILABLE,
+        data=core,
+        observed_at=NOW,
+        as_of=NOW,
+        age=0,
+    )
     scores = {
         theme.name: [
             ThemeScore(
@@ -539,6 +552,26 @@ def test_discovery_snapshot_keeps_prices_for_the_full_scored_cohort(tmp_path) ->
                 entry_prices={"ACME": 125},
             )
         ],
+        positions=[
+            InstrumentPosition(
+                ticker="ACME",
+                instrument_type=InstrumentType.STOCK,
+                sleeve=PortfolioSleeve.THEMATIC,
+                weight_pct=10,
+                currency="USD",
+                entry_price=125,
+                price_timestamp=NOW,
+            ),
+            InstrumentPosition(
+                ticker="VT",
+                instrument_type=InstrumentType.ETF,
+                sleeve=PortfolioSleeve.CORE,
+                weight_pct=90,
+                currency="USD",
+                entry_price=100,
+                price_timestamp=NOW,
+            ),
+        ],
         core_pct=90,
         generated_at=NOW,
     )
@@ -560,13 +593,18 @@ def test_discovery_snapshot_keeps_prices_for_the_full_scored_cohort(tmp_path) ->
         "ACME",
         "BETA",
     ]
-    assert set(restored.prices) == {"ACME", "BETA"}
+    assert set(restored.prices) == {"ACME", "BETA", "VT"}
     assert restored.prices["BETA"].price == 80
     assert restored.prices["BETA"].observed_at == NOW
     assert restored.instrument_metadata["BETA"].name == "Beta Grid PLC"
     assert restored.provenance["market_data"]["BETA"]["source"] == (
         "fixture-market-data"
     )
+    assert [(position.ticker, position.weight_pct) for position in restored.positions] == [
+        ("ACME", 10),
+        ("VT", 90),
+    ]
+    assert restored.instrument_metadata["VT"].instrument_type is InstrumentType.ETF
 
 
 def test_discovery_snapshot_rejects_a_score_without_evidence() -> None:
@@ -616,10 +654,17 @@ def test_discovery_snapshot_rejects_a_score_without_evidence() -> None:
 def test_discover_publishes_a_versioned_scored_cohort(monkeypatch) -> None:
     class FakeTicker:
         def __init__(self, ticker: str) -> None:
+            is_etf = ticker in {"VT", "GRIDETF"}
             self.info = {
                 "symbol": ticker,
-                "shortName": "Acme Energy Corporation",
-                "quoteType": "EQUITY",
+                "shortName": (
+                    "Vanguard Total World Stock ETF"
+                    if ticker == "VT"
+                    else "Grid Infrastructure ETF"
+                    if ticker == "GRIDETF"
+                    else "Acme Energy Corporation"
+                ),
+                "quoteType": "ETF" if is_etf else "EQUITY",
                 "sector": "Industrials",
                 "marketCap": 5_000_000_000,
                 "regularMarketPrice": 125,
@@ -634,6 +679,16 @@ def test_discover_publishes_a_versioned_scored_cohort(monkeypatch) -> None:
                 "averageDailyVolume10Day": 100_000,
             }
             self.financials = pd.DataFrame()
+            self.funds_data = type(
+                "FundsData",
+                (),
+                {
+                    "top_holdings": pd.DataFrame(
+                        {"Holding Percent": [1.0]},
+                        index=["ACME"],
+                    )
+                },
+            )()
 
         def history(self, **_kwargs):
             return pd.DataFrame()
@@ -680,7 +735,15 @@ def test_discover_publishes_a_versioned_scored_cohort(monkeypatch) -> None:
                 }
             )
         if "identify the 1-3 most relevant thematic ETFs" in prompt:
-            return "[]"
+            return json.dumps(
+                [
+                    {
+                        "etf_ticker": "GRIDETF",
+                        "etf_name": "Grid Infrastructure ETF",
+                        "reasoning": "Covers the validated grid candidate.",
+                    }
+                ]
+            )
         raise AssertionError(f"Unexpected AI prompt: {prompt[:80]}")
 
     monkeypatch.setattr(llm, "respond_text", fake_ai)
@@ -689,7 +752,7 @@ def test_discover_publishes_a_versioned_scored_cohort(monkeypatch) -> None:
     runner = CliRunner()
 
     with runner.isolated_filesystem():
-        result = runner.invoke(cli, ["discover"])
+        result = runner.invoke(cli, ["discover", "--capital", "10000"])
         snapshot = RunSnapshotRepository().load_latest()
 
     assert result.exit_code == 0, result.output
@@ -700,3 +763,13 @@ def test_discover_publishes_a_versioned_scored_cohort(monkeypatch) -> None:
     ]
     assert snapshot.prices["ACME"].price == 125
     assert snapshot.prices["ACME"].observed_at == NOW
+    assert [(position.ticker, position.weight_pct) for position in snapshot.positions] == [
+        ("VT", 100)
+    ]
+    assert snapshot.positions[0].capital_amount == 10_000
+    assert "GRIDETF" in snapshot.provenance["market_data"]
+    assert snapshot.allocation.core_pct == 100
+    assert snapshot.allocation.capital == 10_000
+    assert "100.0%" in result.output
+    assert "$10,000.00" in result.output
+    assert "VT / VOO" not in result.output

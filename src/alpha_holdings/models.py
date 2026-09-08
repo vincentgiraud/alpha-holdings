@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, date, datetime
 from enum import Enum
 from typing import Any, ClassVar, Optional, Union
@@ -152,11 +153,6 @@ class MacroRegime(BaseModel):
     regime: MacroRegimeType
     confidence: int = Field(ge=1, le=10)
     drivers: list[str]
-    allocation_modifier: float = Field(
-        ge=0.0,
-        le=1.0,
-        description="Multiplier applied to thematic allocation. 1.0 = full, 0.5 = halved.",
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +162,7 @@ class MacroRegime(BaseModel):
 class Company(BaseModel):
     ticker: str
     exchange_suffix: Optional[str] = None
+    issuer_id: Optional[str] = None
     name: str
     role_in_theme: str
     rationale: str
@@ -179,6 +176,30 @@ class Company(BaseModel):
             return f"{self.ticker}.{self.exchange_suffix}"
         return self.ticker
 
+    @property
+    def exposure_keys(self) -> frozenset[str]:
+        """Conservative aliases used to aggregate effective issuer exposure."""
+        aliases: set[str] = set()
+        if self.issuer_id and self.issuer_id.strip():
+            aliases.add(f"issuer:{self.issuer_id.strip().casefold()}")
+        ignored = {
+            "adr", "ads", "ag", "class", "co", "company", "corp",
+            "corporation", "depositary", "group", "holding", "holdings",
+            "inc", "limited", "llc", "lp", "ltd", "nv", "ordinary",
+            "plc", "receipt", "sa", "se", "shares", "spa", "sponsored",
+            "the",
+        }
+        tokens = [
+            token
+            for token in re.findall(r"[a-z0-9]+", self.name.casefold())
+            if token not in ignored and len(token) > 1
+        ]
+        canonical_name = ":".join(tokens)
+        if canonical_name:
+            aliases.add(f"name:{canonical_name}")
+        if not aliases:
+            aliases.add(f"ticker:{self.full_ticker.upper()}")
+        return frozenset(aliases)
 
 class SubTheme(BaseModel):
     name: str
@@ -368,6 +389,20 @@ class ThemeScore(BaseModel):
     scoring_provider: Optional[str] = None
     scoring_model: Optional[str] = None
 
+    @property
+    def has_complete_evidence(self) -> bool:
+        """Whether the score is eligible for allocation and publication."""
+        return bool(
+            self.revenue_exposure_score is not None
+            and self.score_as_of is not None
+            and self.evidence_sources
+            and self.scoring_provider
+            and self.scoring_model
+            and self.alignment_reasoning
+            and self.pricing_gap_reasoning
+            and self.revenue_exposure_reasoning
+        )
+
 
 class OpportunitySignal(BaseModel):
     ticker: str
@@ -409,6 +444,7 @@ class RiskProfile(BaseModel):
 class AllocationEntry(BaseModel):
     theme: str
     vehicle: str
+    tickers: list[str] = Field(default_factory=list)
     vehicle_type: str = "etf"
     pct_allocation: float
     entry_method: EntryMethod
@@ -418,6 +454,21 @@ class AllocationEntry(BaseModel):
         description="Ticker → price at time of allocation, for sell discipline tracking.",
     )
 
+    @model_validator(mode="after")
+    def _populate_tickers(self):
+        vehicle_tickers = [
+            ticker.strip().upper()
+            for ticker in self.vehicle.split(",")
+            if ticker.strip()
+        ]
+        supplied_tickers = [
+            ticker.strip().upper() for ticker in self.tickers if ticker.strip()
+        ]
+        if supplied_tickers and supplied_tickers != vehicle_tickers:
+            raise ValueError("allocation entry tickers must match its vehicle")
+        self.tickers = supplied_tickers or vehicle_tickers
+        return self
+
 
 class InstrumentPosition(BaseModel):
     """A concrete portfolio position with an explicit percentage-point weight."""
@@ -426,6 +477,7 @@ class InstrumentPosition(BaseModel):
     instrument_type: InstrumentType
     sleeve: PortfolioSleeve
     weight_pct: float = Field(ge=0, le=100)
+    capital_amount: Optional[float] = Field(default=None, ge=0)
     currency: str
     entry_price: float = Field(gt=0)
     price_timestamp: datetime
@@ -495,21 +547,108 @@ class InstrumentPrice(BaseModel):
 
 
 class PortfolioAllocation(BaseModel):
+    ROUNDING_TOLERANCE_PCT: ClassVar[float] = 0.1
+
     risk_profile: RiskProfile
     macro_regime: MacroRegime
+    positions: list[InstrumentPosition] = Field(default_factory=list)
     entries: list[AllocationEntry] = Field(default_factory=list)
     core_pct: float = Field(
+        ge=0,
+        le=100,
         description="Percentage allocated to broad market core (SPY/VT).",
     )
     defensive_pct: float = Field(
         default=0.0,
+        ge=0,
+        le=100,
         description="Percentage in defensive vehicles (bear regime only).",
     )
+    cash_pct: float = Field(
+        default=0.0,
+        ge=0,
+        le=100,
+        description="Percentage retained as cash when investable capacity is unavailable.",
+    )
+    effective_allocation_modifier: float = Field(
+        default=1.0,
+        ge=0,
+        le=1,
+        description="Deterministic regime modifier applied by the allocation policy.",
+    )
+    residual_reason: Optional[str] = None
     capital: Optional[float] = Field(
         default=None,
         description="Total capital to invest, if provided via --capital.",
     )
     generated_at: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def _validate_position_weights(self):
+        if not self.positions:
+            return self
+        tickers = [position.ticker for position in self.positions]
+        if len(tickers) != len(set(tickers)):
+            raise ValueError("allocation positions cannot contain duplicate tickers")
+        total = sum(position.weight_pct for position in self.positions)
+        if abs(total - 100.0) > self.ROUNDING_TOLERANCE_PCT + 1e-9:
+            raise ValueError("allocation positions must total 100% within 0.1 percentage points")
+        sleeve_totals = {
+            sleeve: sum(
+                position.weight_pct
+                for position in self.positions
+                if position.sleeve is sleeve
+            )
+            for sleeve in PortfolioSleeve
+        }
+        declared = {
+            PortfolioSleeve.CORE: self.core_pct,
+            PortfolioSleeve.DEFENSIVE: self.defensive_pct,
+            PortfolioSleeve.CASH: self.cash_pct,
+        }
+        for sleeve, declared_pct in declared.items():
+            if (
+                abs(sleeve_totals[sleeve] - declared_pct)
+                > self.ROUNDING_TOLERANCE_PCT + 1e-9
+            ):
+                raise ValueError(
+                    f"{sleeve.value} percentage does not match its positions"
+                )
+        thematic_pct = sleeve_totals[PortfolioSleeve.THEMATIC]
+        entry_pct = sum(entry.pct_allocation for entry in self.entries)
+        if abs(thematic_pct - entry_pct) > self.ROUNDING_TOLERANCE_PCT + 1e-9:
+            raise ValueError("legacy entries must match thematic positions")
+        position_tickers = {
+            position.ticker
+            for position in self.positions
+            if position.sleeve is PortfolioSleeve.THEMATIC
+        }
+        entry_tickers = {
+            ticker
+            for entry in self.entries
+            for ticker in entry.tickers
+        }
+        if position_tickers != entry_tickers:
+            raise ValueError("legacy entry vehicles must match thematic positions")
+        if self.capital is not None:
+            for position in self.positions:
+                expected_cents = round(
+                    self.capital * position.weight_pct,
+                )
+                actual_cents = round((position.capital_amount or 0) * 100)
+                if (
+                    position.capital_amount is None
+                    or abs(actual_cents - expected_cents) > 1
+                ):
+                    raise ValueError(
+                        f"{position.ticker} capital amount does not match its weight"
+                    )
+            allocated_cents = round(
+                sum(position.capital_amount or 0 for position in self.positions) * 100
+            )
+            if allocated_cents != round(self.capital * 100):
+                raise ValueError("position capital amounts must preserve total capital")
+        return self
 
 
 RUN_SNAPSHOT_SECTIONS = (
@@ -590,6 +729,12 @@ class RunSnapshot(BaseModel):
         data = dict(data)
         data["run_id"] = f"{created_at.strftime('%Y%m%dT%H%M%S%f')}-{uuid4().hex}"
         return data
+
+    @model_validator(mode="after")
+    def _validate_position_projection(self):
+        if self.positions != self.allocation.positions:
+            raise ValueError("snapshot positions must match allocation positions")
+        return self
 
 
 # ---------------------------------------------------------------------------

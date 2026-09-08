@@ -317,15 +317,33 @@ Two axes: appetite × time horizon.
 | Moderate | 50% thematic | 40% thematic | 30% thematic |
 | Aggressive | 75% thematic | 55% thematic | 40% thematic |
 
-Risk appetite also controls how many individual stocks are funded per theme:
+Risk appetite controls the minimum number of funded themes, theme and aggregate
+company concentration caps, and how many individual stocks can be funded per
+theme:
 
-|  | Max stocks per theme |
-|---|---|
-| Conservative | 3 |
-| Moderate | 5 |
-| Aggressive | 7 |
+|  | Minimum themes | Max per theme | Max per company | Max stocks per theme |
+|---|---:|---:|---:|---:|
+| Conservative | 2 | 10% | 5% | 3 |
+| Moderate | 3 | 15% | 8% | 5 |
+| Aggressive | 3 | 25% | 10% | 7 |
 
-All T2-3 stocks scoring above the theme's median composite score are included, up to the profile maximum. Themes with more high-quality picks get more funded positions; themes with only 2-3 strong picks stay concentrated.
+Only candidates with validated scores, provider identity, instrument type, and a
+positive dated price can receive weight. The allocator prefers a validated ETF
+when one is available; otherwise it conviction-weights the highest-scoring
+stocks up to the profile maximum. A theme name is never treated as a ticker.
+
+Allocations are rounded to 0.1 percentage points and must total 100% within a
+0.1-point validation tolerance. Caps and cross-theme overlap penalties change
+relative weights, then remaining eligible instruments are reweighted. Capacity
+that still cannot be invested is explained and moved to the configured `VT`
+core position, or to explicit cash if the core price is unavailable. Duplicate
+listings and share classes connected by canonical issuer aliases share one
+aggregate company cap across themes.
+
+Core (`VT`), defensive (`BND`), thematic, and cash sleeves are all persisted as
+the same concrete position model with ticker, percentage-point weight, capital
+amount when `--capital` is supplied, currency, entry price, and price timestamp.
+The older grouped allocation entries remain a validated compatibility view.
 
 Thesis horizon is always 3-5 years regardless of time horizon setting. Longer horizons simply allocate less to thematic bets and rely on repeated course correction.
 
@@ -335,9 +353,13 @@ The system assesses the overall market environment (bull/neutral/bear) from real
 
 | Regime | Effect |
 |---|---|
-| **Bull** | Full thematic allocation. Fund all themes above baseline. |
-| **Neutral** | Slightly increase core. Only fund themes with confidence ≥7/10. |
-| **Bear** | Reduce thematic to minimum. Only confidence ≥8/10. Suggest defensive vehicles (BND, TLT, GLD). |
+| **Bull** | Deterministic 1.0× thematic modifier. Fund themes with confidence ≥5/10. |
+| **Neutral** | Deterministic 0.8× thematic modifier. Only fund themes with confidence ≥7/10. |
+| **Bear** | Deterministic 0.5× thematic modifier. Only confidence ≥8/10; place 20% of the policy's non-thematic budget in validated `BND`. |
+
+The AI classifies the regime and explains its drivers; it does not choose the
+allocation modifier. The effective deterministic modifier is stored with every
+allocation and versioned run.
 
 ## Supply Chain Tiers
 

@@ -93,7 +93,9 @@ def test_snapshot_instrument_records_reject_blank_tickers(model, values) -> None
         model(**values)
 
 
-def _allocation() -> PortfolioAllocation:
+def _allocation(
+    positions: list[InstrumentPosition] | None = None,
+) -> PortfolioAllocation:
     return PortfolioAllocation(
         risk_profile=RiskProfile(
             appetite=RiskAppetite.MODERATE,
@@ -105,12 +107,24 @@ def _allocation() -> PortfolioAllocation:
             drivers=["Stable growth"],
             allocation_modifier=0.8,
         ),
+        positions=positions or [],
         core_pct=100,
     )
 
 
 def test_run_snapshot_round_trips_a_coherent_research_run() -> None:
     observed_at = datetime(2026, 9, 8, 10, 30, tzinfo=UTC)
+    positions = [
+        InstrumentPosition(
+            ticker="VT",
+            instrument_type=InstrumentType.ETF,
+            sleeve=PortfolioSleeve.CORE,
+            weight_pct=100,
+            currency="USD",
+            entry_price=125,
+            price_timestamp=observed_at,
+        )
+    ]
     snapshot = RunSnapshot(
         created_at=observed_at,
         themes=[],
@@ -142,18 +156,8 @@ def test_run_snapshot_round_trips_a_coherent_research_run() -> None:
                 observed_at=observed_at,
             )
         },
-        positions=[
-            InstrumentPosition(
-                ticker="ETN",
-                instrument_type=InstrumentType.STOCK,
-                sleeve=PortfolioSleeve.THEMATIC,
-                weight_pct=10,
-                currency="USD",
-                entry_price=355.25,
-                price_timestamp=observed_at,
-            )
-        ],
-        allocation=_allocation(),
+        positions=positions,
+        allocation=_allocation(positions),
         model_configuration={"scoring_model": "example-model"},
         provenance={"fundamentals": "example-provider"},
         completeness=SnapshotCompleteness(
@@ -169,10 +173,28 @@ def test_run_snapshot_round_trips_a_coherent_research_run() -> None:
     assert restored.candidate_scores["Grid"][0].ticker == "ETN"
     assert restored.instrument_metadata["ETN"].name == "Eaton"
     assert restored.prices["ETN"].price == 355.25
-    assert restored.positions[0].sleeve is PortfolioSleeve.THEMATIC
+    assert restored.positions[0].sleeve is PortfolioSleeve.CORE
     assert restored.allocation.core_pct == 100
     assert restored.model_configuration["scoring_model"] == "example-model"
     assert restored.provenance["fundamentals"] == "example-provider"
+
+
+def test_run_snapshot_rejects_positions_that_disagree_with_the_allocation() -> None:
+    observed_at = datetime(2026, 9, 8, 10, 30, tzinfo=UTC)
+    core = InstrumentPosition(
+        ticker="VT",
+        instrument_type=InstrumentType.ETF,
+        sleeve=PortfolioSleeve.CORE,
+        weight_pct=100,
+        currency="USD",
+        entry_price=125,
+        price_timestamp=observed_at,
+    )
+    allocation = _allocation().model_copy(update={"positions": [core]})
+    inconsistent = core.model_copy(update={"entry_price": 126})
+
+    with pytest.raises(ValidationError, match="positions must match allocation positions"):
+        RunSnapshot(allocation=allocation, positions=[inconsistent])
 
 
 def test_repeated_same_day_runs_receive_unique_identifiers() -> None:
@@ -307,20 +329,21 @@ def test_show_allocation_displays_a_versioned_snapshot() -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
         observed_at = datetime(2026, 9, 8, 10, 30, tzinfo=UTC)
+        positions = [
+            InstrumentPosition(
+                ticker="VWCE.DE",
+                instrument_type=InstrumentType.ETF,
+                sleeve=PortfolioSleeve.CORE,
+                weight_pct=100,
+                currency="EUR",
+                entry_price=118.42,
+                price_timestamp=observed_at,
+            )
+        ]
         snapshot = RunSnapshot(
             created_at=observed_at,
-            allocation=_allocation(),
-            positions=[
-                InstrumentPosition(
-                    ticker="VWCE.DE",
-                    instrument_type=InstrumentType.ETF,
-                    sleeve=PortfolioSleeve.CORE,
-                    weight_pct=100,
-                    currency="EUR",
-                    entry_price=118.42,
-                    price_timestamp=observed_at,
-                )
-            ],
+            allocation=_allocation(positions),
+            positions=positions,
         )
         RunSnapshotRepository().save(snapshot)
 
@@ -368,3 +391,22 @@ def test_show_themes_displays_themes_from_a_versioned_snapshot() -> None:
     assert result.exit_code == 0
     assert "Grid Modernization" in result.output
     assert "No saved themes" not in result.output
+
+
+def test_snapshot_rejects_top_level_positions_when_allocation_has_none() -> None:
+    observed_at = datetime(2026, 9, 8, 10, 30, tzinfo=UTC)
+    position = InstrumentPosition(
+        ticker="VWCE.DE",
+        instrument_type=InstrumentType.ETF,
+        sleeve=PortfolioSleeve.CORE,
+        weight_pct=100,
+        currency="EUR",
+        entry_price=118.42,
+        price_timestamp=observed_at,
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="snapshot positions must match allocation positions",
+    ):
+        RunSnapshot(allocation=_allocation(), positions=[position])

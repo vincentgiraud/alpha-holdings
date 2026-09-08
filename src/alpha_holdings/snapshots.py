@@ -51,16 +51,7 @@ def build_discovery_snapshot(
     for theme_scores in scores.values():
         for score in theme_scores:
             ticker = score.ticker.upper()
-            if (
-                score.revenue_exposure_score is None
-                or score.score_as_of is None
-                or not score.evidence_sources
-                or not score.scoring_provider
-                or not score.scoring_model
-                or not score.alignment_reasoning
-                or not score.pricing_gap_reasoning
-                or not score.revenue_exposure_reasoning
-            ):
+            if not score.has_complete_evidence:
                 raise ValueError(f"Scored candidate {ticker} is missing evidence")
             company = companies.get(ticker)
             observation = observations.get(ticker)
@@ -92,6 +83,50 @@ def build_discovery_snapshot(
                 source=fundamentals.source,
             )
 
+    for position in allocation.positions:
+        ticker = position.ticker.upper()
+        if position.instrument_type is InstrumentType.CASH:
+            metadata[ticker] = InstrumentMetadata(
+                ticker=ticker,
+                instrument_type=InstrumentType.CASH,
+                currency=position.currency,
+                name="Cash",
+            )
+            prices[ticker] = InstrumentPrice(
+                ticker=ticker,
+                price=position.entry_price,
+                currency=position.currency,
+                observed_at=position.price_timestamp,
+                source="cash-par",
+            )
+            continue
+        observation = observations.get(ticker)
+        if observation is None or observation.data is None or observation.as_of is None:
+            raise ValueError(f"Allocated position {ticker} is missing market evidence")
+        fundamentals = observation.data
+        if (
+            fundamentals.current_price != position.entry_price
+            or observation.as_of != position.price_timestamp
+        ):
+            raise ValueError(
+                f"Allocated position {ticker} does not match its market observation"
+            )
+        exchange = ticker.rsplit(".", 1)[1] if "." in ticker else None
+        metadata[ticker] = InstrumentMetadata(
+            ticker=ticker,
+            instrument_type=position.instrument_type,
+            currency=position.currency,
+            name=fundamentals.name,
+            exchange=exchange,
+        )
+        prices[ticker] = InstrumentPrice(
+            ticker=ticker,
+            price=position.entry_price,
+            currency=position.currency,
+            observed_at=position.price_timestamp,
+            source=fundamentals.source,
+        )
+
     snapshot_provenance = dict(provenance or {})
     snapshot_provenance["market_data"] = {
         ticker: {
@@ -108,6 +143,7 @@ def build_discovery_snapshot(
         candidate_scores=scores,
         instrument_metadata=metadata,
         prices=prices,
+        positions=allocation.positions,
         allocation=allocation,
         model_configuration=model_configuration or {},
         provenance=snapshot_provenance,

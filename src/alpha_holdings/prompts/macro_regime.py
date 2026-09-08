@@ -42,7 +42,6 @@ Return a JSON object with:
 - "regime": "bull" | "neutral" | "bear"
 - "confidence": 1-10 (how confident in this assessment)
 - "drivers": list of 3-5 key factors driving this assessment
-- "allocation_modifier": float 0.0-1.0 (1.0 = favorable conditions, 0.5 = cautious conditions, etc.)
 
 Return ONLY valid JSON. No commentary outside the JSON.
 """

@@ -27,6 +27,14 @@ MAX_THEME_PCT: dict[RiskAppetite, float] = {
     RiskAppetite.AGGRESSIVE: 0.25,
 }
 
+# Max aggregate direct-stock exposure across every theme. Listings connected
+# by ticker, canonical issuer name, or issuer identifier share this cap.
+MAX_COMPANY_PCT: dict[RiskAppetite, float] = {
+    RiskAppetite.CONSERVATIVE: 0.05,
+    RiskAppetite.MODERATE: 0.08,
+    RiskAppetite.AGGRESSIVE: 0.10,
+}
+
 # Minimum funded themes by appetite
 MIN_THEMES: dict[RiskAppetite, int] = {
     RiskAppetite.CONSERVATIVE: 2,
@@ -54,6 +62,12 @@ REGIME_MODIFIER: dict[str, float] = {
     "neutral": 0.8,
     "bear": 0.5,
 }
+
+# Deterministic sleeve instruments. Theme ETFs remain unfunded until their
+# market identity and price have been validated through the allocation input.
+CORE_TICKER = "VT"
+DEFENSIVE_TICKER = "BND"
+CASH_TICKER = "CASH"
 
 # Scoring weights (must sum to 1.0)
 SCORING_WEIGHTS = {

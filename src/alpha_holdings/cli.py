@@ -19,6 +19,7 @@ from rich.text import Text
 
 from alpha_holdings.models import (
     EntryMethod,
+    ETFRecommendationType,
     MacroRegimeType,
     MarketDataStatus,
     OpportunityType,
@@ -282,9 +283,33 @@ def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str
 
     # Step 6: Allocation
     console.rule("[bold]Step 6: Portfolio Allocation[/bold]")
+    from alpha_holdings.config import CORE_TICKER, DEFENSIVE_TICKER
+
+    sleeve_tickers = {CORE_TICKER}
+    if regime.regime is MacroRegimeType.BEAR:
+        sleeve_tickers.add(DEFENSIVE_TICKER)
+    sleeve_tickers.update(
+        recommendation.etf_ticker.strip().upper()
+        for recommendation in etf_recs.values()
+        if recommendation.recommendation is ETFRecommendationType.ETF_SUFFICIENT
+        and recommendation.etf_ticker
+    )
+    sleeve_results = fund_mod.fetch_batch(sorted(sleeve_tickers))
+    fund_results.update(sleeve_results)
+    _print_market_data_issues(sleeve_results)
+    fund_data.update(
+        {
+            ticker: result.data
+            for ticker, result in sleeve_results.items()
+            if result.data is not None
+        }
+    )
     allocation = alloc_mod.allocate(
         themes, scores, etf_recs, profile, regime,
-        fund_data=fund_data, capital=capital,
+        fund_data=fund_data,
+        capital=capital,
+        clock=fund_mod.DEFAULT_CLOCK,
+        base_currency=base_currency,
     )
 
     # Display results
@@ -1129,57 +1154,74 @@ def _print_allocation(allocation) -> None:
     table.add_column("Entry", justify="center")
     table.add_column("Rationale", max_width=50)
 
-    for e in allocation.entries:
-        entry_style = {
-            EntryMethod.LUMP_SUM: "[green]Lump Sum[/green]",
-            EntryMethod.DCA: "[yellow]DCA[/yellow]",
-            EntryMethod.WAIT: "[red]Wait[/red]",
-        }
-        row = [
-            e.theme,
-            e.vehicle,
-            f"{e.pct_allocation:.1f}%",
+    entry_style = {
+        EntryMethod.LUMP_SUM: "[green]Lump Sum[/green]",
+        EntryMethod.DCA: "[yellow]DCA[/yellow]",
+        EntryMethod.WAIT: "[red]Wait[/red]",
+    }
+    if allocation.positions:
+        entry_by_ticker = {}
+        for entry in allocation.entries:
+            for ticker in entry.tickers:
+                entry_by_ticker.setdefault(ticker, []).append(entry)
+        for position in allocation.positions:
+            linked_entries = entry_by_ticker.get(position.ticker, [])
+            if linked_entries:
+                label = " / ".join(entry.theme for entry in linked_entries)
+                method = linked_entries[0].entry_method
+                rationale = "; ".join(entry.rationale for entry in linked_entries)
+            else:
+                label = position.sleeve.value.capitalize()
+                method = EntryMethod.DCA
+                rationale = {
+                    "core": "Stability + diversification",
+                    "defensive": "Deterministic bear-regime sleeve",
+                    "cash": allocation.residual_reason or "Capital preservation",
+                }.get(position.sleeve.value, "Model allocation")
+            row = [label, position.ticker, f"{position.weight_pct:.1f}%"]
+            if has_capital:
+                amount = position.capital_amount
+                assert amount is not None
+                amount_str = f"${amount:,.2f}"
+                if amount < min_position and position.sleeve.value == "thematic":
+                    amount_str += " [red]⚠ min[/red]"
+                row.append(amount_str)
+            row.extend([entry_style[method], rationale])
+            table.add_row(*row, style="dim" if not linked_entries else None)
+    else:
+        for entry in allocation.entries:
+            row = [entry.theme, entry.vehicle, f"{entry.pct_allocation:.1f}%"]
+            if has_capital:
+                amount = allocation.capital * entry.pct_allocation / 100
+                row.append(f"${amount:,.0f}")
+            row.extend([entry_style[entry.entry_method], entry.rationale])
+            table.add_row(*row)
+
+        core_row = [
+            "[dim]Broad Market Core[/dim]",
+            "VT / VOO",
+            f"{allocation.core_pct:.1f}%",
         ]
         if has_capital:
-            amount = allocation.capital * e.pct_allocation / 100
-            amount_str = f"${amount:,.0f}"
-            if amount < min_position:
-                amount_str += " [red]⚠ min[/red]"
-            row.append(amount_str)
-        row.extend([
-            entry_style.get(e.entry_method, str(e.entry_method.value)),
-            e.rationale,
-        ])
-        table.add_row(*row)
-
-    core_row = [
-        "[dim]Broad Market Core[/dim]",
-        "VT / VOO",
-        f"{allocation.core_pct:.1f}%",
-    ]
-    if has_capital:
-        core_row.append(f"${allocation.capital * allocation.core_pct / 100:,.0f}")
-    core_row.extend(["[yellow]DCA[/yellow]", "Stability + diversification"])
-    table.add_row(*core_row, style="dim")
-
-    if allocation.defensive_pct > 0:
-        def_row = [
-            "[dim]Defensive[/dim]",
-            "BND / TLT / GLD",
-            f"{allocation.defensive_pct:.1f}%",
-        ]
-        if has_capital:
-            def_row.append(f"${allocation.capital * allocation.defensive_pct / 100:,.0f}")
-        def_row.extend(["[yellow]DCA[/yellow]", "Bear regime defensive allocation"])
-        table.add_row(*def_row, style="dim")
+            core_row.append(
+                f"${allocation.capital * allocation.core_pct / 100:,.0f}"
+            )
+        core_row.extend(["[yellow]DCA[/yellow]", "Stability + diversification"])
+        table.add_row(*core_row, style="dim")
 
     console.print(table)
 
     if has_capital:
-        small_entries = [e for e in allocation.entries if allocation.capital * e.pct_allocation / 100 < min_position]
-        if small_entries:
+        small_positions = [
+            position
+            for position in allocation.positions
+            if position.sleeve.value == "thematic"
+            and position.capital_amount is not None
+            and position.capital_amount < min_position
+        ]
+        if small_positions:
             console.print(
-                f"[yellow]⚠ {len(small_entries)} positions below ${min_position} minimum. "
+                f"[yellow]⚠ {len(small_positions)} positions below ${min_position} minimum. "
                 f"With ${allocation.capital:,.0f} capital, consider using ETFs for small allocations "
                 f"instead of individual stocks.[/yellow]"
             )

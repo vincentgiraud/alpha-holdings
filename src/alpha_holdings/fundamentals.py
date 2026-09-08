@@ -16,6 +16,7 @@ from alpha_holdings.models import (
     Company,
     Fundamentals,
     FundamentalsResult,
+    InstrumentType,
     MarketDataStatus,
 )
 
@@ -373,30 +374,81 @@ def validate_company_identity(
 ) -> tuple[bool, str]:
     """Verify provider symbol/type/name metadata against the proposed company."""
     expected_symbol = company.full_ticker.strip().upper()
-    fundamentals_symbol = fundamentals.ticker.strip().upper()
-    if fundamentals_symbol != expected_symbol:
-        return False, (
-            f"fundamentals ticker '{fundamentals_symbol}' does not match "
-            f"'{expected_symbol}'"
-        )
-    provider_symbol = (fundamentals.provider_symbol or "").strip().upper()
-    if not provider_symbol:
-        return False, "provider did not report symbol identity"
-    if provider_symbol != expected_symbol:
-        return False, (
-            f"provider symbol '{provider_symbol}' does not match '{expected_symbol}'"
-        )
-    quote_type = (fundamentals.quote_type or "").strip().upper()
-    if quote_type not in {"EQUITY", "STOCK"}:
-        shown = quote_type or "missing"
-        return False, f"provider quote type '{shown}' is not an equity"
-    if not fundamentals.name:
-        return False, "provider did not report company identity"
+    identity_error = _provider_identity_error(
+        expected_symbol,
+        fundamentals,
+        expected_quote_types={"EQUITY", "STOCK"},
+        identity_label="company",
+        quote_type_label="an equity",
+    )
+    if identity_error:
+        return False, identity_error
     if not _company_names_match(company.name, fundamentals.name):
         return False, (
             f"provider name '{fundamentals.name}' does not match '{company.name}'"
         )
     return True, "OK"
+
+
+def validate_priced_instrument(
+    ticker: str,
+    instrument_type: InstrumentType,
+    fundamentals: Fundamentals,
+) -> tuple[bool, str]:
+    """Validate identity, type, and dated positive price for allocation."""
+    expected_ticker = ticker.strip().upper()
+    expected_quote_types = (
+        {"ETF"}
+        if instrument_type is InstrumentType.ETF
+        else {"EQUITY", "STOCK"}
+    )
+    identity_error = _provider_identity_error(
+        expected_ticker,
+        fundamentals,
+        expected_quote_types=expected_quote_types,
+        identity_label="instrument",
+        quote_type_label=f"valid for {instrument_type.value}",
+    )
+    if identity_error:
+        return False, identity_error
+    if not _is_positive_finite(fundamentals.current_price):
+        return False, "provider did not report a positive finite price"
+    if fundamentals.fetched_at is None:
+        return False, "provider price is missing its observation timestamp"
+    return True, "OK"
+
+
+def _provider_identity_error(
+    expected_ticker: str,
+    fundamentals: Fundamentals,
+    *,
+    expected_quote_types: set[str],
+    identity_label: str,
+    quote_type_label: str,
+) -> str | None:
+    """Return why provider identity/type evidence is invalid, if it is."""
+    fundamentals_ticker = fundamentals.ticker.strip().upper()
+    if fundamentals_ticker != expected_ticker:
+        return (
+            f"fundamentals ticker '{fundamentals_ticker}' does not match "
+            f"'{expected_ticker}'"
+        )
+    provider_symbol = (fundamentals.provider_symbol or "").strip().upper()
+    if not provider_symbol:
+        return "provider did not report symbol identity"
+    if provider_symbol != expected_ticker:
+        return (
+            f"provider symbol '{provider_symbol}' does not match '{expected_ticker}'"
+        )
+    quote_type = (fundamentals.quote_type or "").strip().upper()
+    if quote_type not in expected_quote_types:
+        return (
+            f"provider quote type '{quote_type or 'missing'}' is not "
+            f"{quote_type_label}"
+        )
+    if not fundamentals.name:
+        return f"provider did not report {identity_label} identity"
+    return None
 
 
 def _company_names_match(expected: str, actual: str) -> bool:

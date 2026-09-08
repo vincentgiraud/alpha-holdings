@@ -51,7 +51,6 @@ def assess_regime(*, domain_filter: bool = True) -> MacroRegime:
             regime=MacroRegimeType.NEUTRAL,
             confidence=5,
             drivers=["Unable to assess — defaulting to neutral"],
-            allocation_modifier=0.8,
         )
 
 
