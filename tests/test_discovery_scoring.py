@@ -30,6 +30,7 @@ from alpha_holdings.models import (
     MacroRegimeType,
     PortfolioAllocation,
     PortfolioSleeve,
+    PriceBasis,
     RiskAppetite,
     RiskProfile,
     SubTheme,
@@ -502,6 +503,7 @@ def test_discovery_snapshot_keeps_prices_for_the_full_scored_cohort(tmp_path) ->
     }
     core = _complete_fundamentals("VT", "Vanguard Total World Stock ETF", 100)
     core.quote_type = "ETF"
+    core.price_basis = PriceBasis.ADJUSTED_CLOSE
     market_data["VT"] = FundamentalsResult(
         ticker="VT",
         status=MarketDataStatus.AVAILABLE,
@@ -677,6 +679,8 @@ def test_discover_publishes_a_versioned_scored_cohort(monkeypatch) -> None:
                 "returnOnEquity": 0.15,
                 "freeCashflow": 250_000_000,
                 "averageDailyVolume10Day": 100_000,
+                "totalAssets": 500_000_000 if is_etf else None,
+                "annualReportExpenseRatio": 0.004 if is_etf else None,
             }
             self.financials = pd.DataFrame()
             self.funds_data = type(
@@ -690,7 +694,12 @@ def test_discover_publishes_a_versioned_scored_cohort(monkeypatch) -> None:
                 },
             )()
 
-        def history(self, **_kwargs):
+        def history(self, **kwargs):
+            if kwargs.get("auto_adjust") is False:
+                return pd.DataFrame(
+                    {"Adj Close": [125.0]},
+                    index=[pd.Timestamp(NOW)],
+                )
             return pd.DataFrame()
 
     def fake_ai(prompt: str, **_kwargs) -> str:

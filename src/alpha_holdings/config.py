@@ -69,6 +69,11 @@ CORE_TICKER = "VT"
 DEFENSIVE_TICKER = "BND"
 CASH_TICKER = "CASH"
 
+# Minimum investability policy for thematic ETF allocation vehicles.
+MIN_ETF_AUM = 50_000_000
+MIN_ETF_AVG_DAILY_VOLUME = 50_000
+MAX_ETF_EXPENSE_RATIO = 0.01
+
 # Scoring weights (must sum to 1.0)
 SCORING_WEIGHTS = {
     "fundamental": 0.40,

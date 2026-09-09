@@ -188,6 +188,11 @@ alpha-holdings backtest --validate               # Include score validation anal
 
 **Building a track record:** Run `discover` periodically (weekly/monthly) to accumulate snapshots. Each snapshot records entry prices at discovery time. The backtest compares those frozen entry prices against current market prices. More snapshots = more statistical power for validating the model.
 
+Backtests and `monitor --since` consume the concrete position list, including
+core, defensive, and thematic ETFs. If any funded instrument lacks current or
+historical data, the analysis names the missing ticker and leaves portfolio
+metrics unavailable instead of silently reweighting the remaining positions.
+
 **Limitations:** Backtesting only works from when themes were first saved. Cannot simulate past runs retroactively. Statistical significance requires 3+ months and multiple snapshots. Past performance does not predict future results.
 
 ### `alpha-holdings show`
@@ -332,6 +337,20 @@ positive dated price can receive weight. The allocator prefers a validated ETF
 when one is available; otherwise it conviction-weights the highest-scoring
 stocks up to the profile maximum. A theme name is never treated as a ticker.
 
+ETF suggestions are treated as untrusted candidates, not selections. Every
+suggested symbol is checked against provider identity and ETF type, then must
+have at least $50 million in assets, 50,000 average daily volume, an expense
+ratio no higher than 1%, holdings data, and a dated adjusted close with a named
+source. All candidates are evaluated before ranking by theme-company coverage,
+assets, and expense ratio. Provider failures and incomplete evidence fail
+closed.
+
+Holdings weights are read only from recognized named fields. Fractional
+`Holding Percent` values are converted to percentage points, while
+`% Of Net Assets` and `pctNetAssets` are already percentages. Reported coverage
+is quantified and any residual is retained as `UNKNOWN/OTHER`. The complete
+candidate audit and selected evidence are persisted in the versioned run.
+
 Allocations are rounded to 0.1 percentage points and must total 100% within a
 0.1-point validation tolerance. Caps and cross-theme overlap penalties change
 relative weights, then remaining eligible instruments are reweighted. Capacity
@@ -343,6 +362,7 @@ aggregate company cap across themes.
 Core (`VT`), defensive (`BND`), thematic, and cash sleeves are all persisted as
 the same concrete position model with ticker, percentage-point weight, capital
 amount when `--capital` is supplied, currency, entry price, and price timestamp.
+Every funded ETF uses its validated adjusted close, timestamp, and source.
 The older grouped allocation entries remain a validated compatibility view.
 
 Thesis horizon is always 3-5 years regardless of time horizon setting. Longer horizons simply allocate less to thematic bets and rely on repeated course correction.

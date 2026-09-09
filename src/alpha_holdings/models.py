@@ -54,6 +54,10 @@ class MarketDataStatus(str, Enum):
     INVALID = "invalid"
 
 
+class PriceBasis(str, Enum):
+    ADJUSTED_CLOSE = "adjusted_close"
+
+
 class ThesisStatus(str, Enum):
     STRENGTHENED = "strengthened"
     UNCHANGED = "unchanged"
@@ -280,6 +284,14 @@ class Fundamentals(BaseModel):
     high_52w: Optional[float] = None
     low_52w: Optional[float] = None
     current_price: Optional[float] = None
+    price_basis: Optional[PriceBasis] = Field(
+        default=None,
+        description="Provider-defined basis for current_price, such as adjusted_close.",
+    )
+    price_as_of: Optional[datetime] = Field(
+        default=None,
+        description="Timestamp of the price itself when distinct from retrieval time.",
+    )
     drawdown_from_peak: Optional[float] = None
     ev_to_ebitda: Optional[float] = None
     avg_daily_volume: Optional[float] = None
@@ -421,6 +433,147 @@ class OpportunitySignal(BaseModel):
 # ETF
 # ---------------------------------------------------------------------------
 
+class ETFMarketEvidence(BaseModel):
+    """Provider evidence required before an ETF can receive portfolio weight."""
+
+    ticker: str
+    provider_symbol: Optional[str] = None
+    name: Optional[str] = None
+    quote_type: Optional[str] = None
+    average_daily_volume: Optional[float] = None
+    total_assets: Optional[float] = None
+    expense_ratio: Optional[float] = None
+    adjusted_close: Optional[float] = None
+    price_as_of: Optional[datetime] = None
+    source: Optional[str] = None
+    holdings: dict[str, float] = Field(default_factory=dict)
+
+    def investability_reasons(self, requested_ticker: str) -> list[str]:
+        """Return deterministic policy failures for this provider observation."""
+        import math
+        from alpha_holdings.config import (
+            MAX_ETF_EXPENSE_RATIO,
+            MIN_ETF_AUM,
+            MIN_ETF_AVG_DAILY_VOLUME,
+        )
+
+        reasons: list[str] = []
+        requested = requested_ticker.strip().upper()
+        if self.ticker.strip().upper() != requested:
+            reasons.append("evidence ticker does not match the requested ticker")
+        if (self.provider_symbol or "").strip().upper() != requested:
+            reasons.append("provider symbol does not match the requested ticker")
+        if (self.quote_type or "").strip().upper() != "ETF":
+            reasons.append("provider quote type is not ETF")
+        if (
+            self.average_daily_volume is None
+            or not math.isfinite(self.average_daily_volume)
+            or self.average_daily_volume < MIN_ETF_AVG_DAILY_VOLUME
+        ):
+            reasons.append("average daily volume is below policy minimum")
+        if (
+            self.total_assets is None
+            or not math.isfinite(self.total_assets)
+            or self.total_assets < MIN_ETF_AUM
+        ):
+            reasons.append("assets are below policy minimum")
+        if (
+            self.expense_ratio is None
+            or not math.isfinite(self.expense_ratio)
+            or self.expense_ratio < 0
+            or self.expense_ratio > MAX_ETF_EXPENSE_RATIO
+        ):
+            reasons.append("expense ratio is unavailable or above policy maximum")
+        if (
+            self.adjusted_close is None
+            or not math.isfinite(self.adjusted_close)
+            or self.adjusted_close <= 0
+        ):
+            reasons.append("adjusted entry price is unavailable")
+        if self.price_as_of is None:
+            reasons.append("adjusted entry price is missing its as-of timestamp")
+        if not self.source or not self.source.strip():
+            reasons.append("provider source is unavailable")
+        if not self.holdings:
+            reasons.append("holdings data is unavailable")
+        elif any(
+            not math.isfinite(weight) or weight <= 0
+            for weight in self.holdings.values()
+        ):
+            reasons.append("holdings weights must be finite and positive")
+        else:
+            total_weight = sum(self.holdings.values())
+            if not math.isfinite(total_weight) or total_weight > 100.01:
+                reasons.append("holdings weights exceed 100%")
+        return reasons
+
+
+class ETFCandidateEvaluation(BaseModel):
+    ticker: str
+    is_valid: bool
+    rejection_reasons: list[str] = Field(default_factory=list)
+    evidence: Optional[ETFMarketEvidence] = None
+    holdings_coverage_pct: Optional[float] = None
+    unknown_weight_pct: Optional[float] = None
+    theme_coverage_pct: Optional[float] = None
+
+    @model_validator(mode="after")
+    def _validate_outcome(self):
+        if self.is_valid:
+            if self.evidence is None:
+                raise ValueError("valid ETF evaluation requires evidence")
+            if self.rejection_reasons:
+                raise ValueError("valid ETF evaluation cannot have rejection reasons")
+            reasons = self.evidence.investability_reasons(self.ticker)
+            if reasons:
+                raise ValueError("valid ETF evaluation contains invalid evidence")
+        elif not self.rejection_reasons:
+            raise ValueError("invalid ETF evaluation requires rejection reasons")
+        return self
+
+    def to_market_data(
+        self,
+        *,
+        observed_at: datetime | None = None,
+    ) -> FundamentalsResult:
+        """Project a validated candidate into allocation market data."""
+        if not self.is_valid or self.evidence is None:
+            raise ValueError("only validated ETF evidence can become market data")
+        evidence = self.evidence
+        assert evidence.adjusted_close is not None
+        assert evidence.price_as_of is not None
+        retrieval_time = observed_at or datetime.now(UTC)
+        retrieval_utc = (
+            retrieval_time.replace(tzinfo=UTC)
+            if retrieval_time.tzinfo is None
+            else retrieval_time.astimezone(UTC)
+        )
+        price_utc = (
+            evidence.price_as_of.replace(tzinfo=UTC)
+            if evidence.price_as_of.tzinfo is None
+            else evidence.price_as_of.astimezone(UTC)
+        )
+        return FundamentalsResult(
+            ticker=evidence.ticker,
+            status=MarketDataStatus.AVAILABLE,
+            data=Fundamentals(
+                ticker=evidence.ticker,
+                provider_symbol=evidence.provider_symbol,
+                name=evidence.name,
+                quote_type=evidence.quote_type,
+                source=evidence.source,
+                current_price=evidence.adjusted_close,
+                price_basis=PriceBasis.ADJUSTED_CLOSE,
+                price_as_of=price_utc,
+                avg_daily_volume=evidence.average_daily_volume,
+                fetched_at=retrieval_utc,
+            ),
+            observed_at=retrieval_utc,
+            as_of=price_utc,
+            age=max((retrieval_utc - price_utc).total_seconds(), 0),
+        )
+
+
 class ETFRecommendation(BaseModel):
     theme_name: str
     etf_ticker: Optional[str] = None
@@ -428,8 +581,54 @@ class ETFRecommendation(BaseModel):
     expense_ratio: Optional[float] = None
     aum: Optional[float] = None
     overlap_pct: Optional[float] = None
+    holdings: dict[str, float] = Field(default_factory=dict)
+    holdings_coverage_pct: Optional[float] = None
+    unknown_weight_pct: Optional[float] = None
+    selected_evidence: Optional[ETFMarketEvidence] = None
+    candidate_evaluations: list[ETFCandidateEvaluation] = Field(default_factory=list)
     recommendation: ETFRecommendationType
     reasoning: str
+
+    @property
+    def adjusted_entry_price(self) -> Optional[float]:
+        return self.selected_evidence.adjusted_close if self.selected_evidence else None
+
+    @property
+    def price_as_of(self) -> Optional[datetime]:
+        return self.selected_evidence.price_as_of if self.selected_evidence else None
+
+    @property
+    def price_source(self) -> Optional[str]:
+        return self.selected_evidence.source if self.selected_evidence else None
+
+    @model_validator(mode="after")
+    def _validate_funded_selection(self):
+        if self.recommendation is not ETFRecommendationType.ETF_SUFFICIENT:
+            return self
+        ticker = (self.etf_ticker or "").strip().upper()
+        if not ticker or self.selected_evidence is None:
+            raise ValueError("ETF-sufficient recommendation requires selected evidence")
+        if self.selected_evidence.ticker.strip().upper() != ticker:
+            raise ValueError("selected ETF evidence must match the recommendation ticker")
+        if not any(
+            evaluation.ticker.strip().upper() == ticker
+            and evaluation.is_valid
+            and evaluation.evidence == self.selected_evidence
+            for evaluation in self.candidate_evaluations
+        ):
+            raise ValueError("selected ETF evidence must match a valid candidate audit")
+        return self
+
+    def to_market_data(
+        self,
+        *,
+        observed_at: datetime | None = None,
+    ) -> FundamentalsResult:
+        """Project the audited selected vehicle into allocation market data."""
+        for evaluation in self.candidate_evaluations:
+            if evaluation.is_valid and evaluation.evidence == self.selected_evidence:
+                return evaluation.to_market_data(observed_at=observed_at)
+        raise ValueError("recommendation has no validated selected evidence")
 
 
 # ---------------------------------------------------------------------------
@@ -654,6 +853,7 @@ class PortfolioAllocation(BaseModel):
 RUN_SNAPSHOT_SECTIONS = (
     "themes",
     "candidate_scores",
+    "etf_recommendations",
     "instrument_metadata",
     "prices",
     "positions",
@@ -704,6 +904,7 @@ class RunSnapshot(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     themes: list[ThemeThesis] = Field(default_factory=list)
     candidate_scores: dict[str, list[ThemeScore]] = Field(default_factory=dict)
+    etf_recommendations: dict[str, ETFRecommendation] = Field(default_factory=dict)
     instrument_metadata: dict[str, InstrumentMetadata] = Field(default_factory=dict)
     prices: dict[str, InstrumentPrice] = Field(default_factory=dict)
     positions: list[InstrumentPosition] = Field(default_factory=list)

@@ -12,12 +12,15 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from alpha_holdings.models import (
+    ETFRecommendation,
+    ETFRecommendationType,
     FundamentalsResult,
     InstrumentMetadata,
     InstrumentPrice,
     InstrumentType,
     RUN_SNAPSHOT_SECTIONS,
     PortfolioAllocation,
+    PriceBasis,
     RunSnapshot,
     SnapshotCompleteness,
     SnapshotSourceFormat,
@@ -32,6 +35,7 @@ def build_discovery_snapshot(
     scores: dict[str, list[ThemeScore]],
     market_data: dict[str, FundamentalsResult],
     allocation: PortfolioAllocation,
+    etf_recommendations: dict[str, ETFRecommendation] | None = None,
     created_at: datetime | None = None,
     model_configuration: dict | None = None,
     provenance: dict | None = None,
@@ -45,6 +49,7 @@ def build_discovery_snapshot(
         for company in theme.all_companies
     }
     observations = {ticker.upper(): result for ticker, result in market_data.items()}
+    recommendations = etf_recommendations or {}
     metadata: dict[str, InstrumentMetadata] = {}
     prices: dict[str, InstrumentPrice] = {}
 
@@ -85,6 +90,30 @@ def build_discovery_snapshot(
 
     for position in allocation.positions:
         ticker = position.ticker.upper()
+        if (
+            position.instrument_type is InstrumentType.ETF
+            and position.sleeve.value == "thematic"
+        ):
+            matching_recommendations = [
+                recommendation
+                for recommendation in recommendations.values()
+                if recommendation.recommendation
+                is ETFRecommendationType.ETF_SUFFICIENT
+                and (recommendation.etf_ticker or "").strip().upper() == ticker
+            ]
+            if not matching_recommendations:
+                raise ValueError(
+                    f"Funded ETF {ticker} is missing its validated selection audit"
+                )
+            recommendation = matching_recommendations[0]
+            if (
+                recommendation.adjusted_entry_price != position.entry_price
+                or recommendation.price_as_of != position.price_timestamp
+                or not recommendation.price_source
+            ):
+                raise ValueError(
+                    f"Funded ETF {ticker} does not match its adjusted price audit"
+                )
         if position.instrument_type is InstrumentType.CASH:
             metadata[ticker] = InstrumentMetadata(
                 ticker=ticker,
@@ -111,6 +140,18 @@ def build_discovery_snapshot(
             raise ValueError(
                 f"Allocated position {ticker} does not match its market observation"
             )
+        if position.instrument_type is InstrumentType.ETF:
+            if fundamentals.price_basis is not PriceBasis.ADJUSTED_CLOSE or not fundamentals.source:
+                raise ValueError(
+                    f"Funded ETF {ticker} is missing adjusted-close evidence"
+                )
+            if (
+                position.sleeve.value == "thematic"
+                and recommendation.price_source != fundamentals.source
+            ):
+                raise ValueError(
+                    f"Funded ETF {ticker} does not match its adjusted price audit"
+                )
         exchange = ticker.rsplit(".", 1)[1] if "." in ticker else None
         metadata[ticker] = InstrumentMetadata(
             ticker=ticker,
@@ -141,6 +182,7 @@ def build_discovery_snapshot(
         created_at=created_at or datetime.now(UTC),
         themes=themes,
         candidate_scores=scores,
+        etf_recommendations=recommendations,
         instrument_metadata=metadata,
         prices=prices,
         positions=allocation.positions,

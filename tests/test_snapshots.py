@@ -315,6 +315,7 @@ def test_repository_adapts_a_legacy_three_file_snapshot_with_completeness_metada
         "allocation",
     ]
     assert snapshot.completeness.missing_sections == [
+        "etf_recommendations",
         "instrument_metadata",
         "prices",
         "positions",

@@ -532,7 +532,7 @@ def _priced_position(
         weight_pct=weight_pct,
         currency=currency,
         entry_price=fundamentals.current_price,
-        price_timestamp=fundamentals.fetched_at,
+        price_timestamp=fundamentals.price_as_of or fundamentals.fetched_at,
     )
 
 

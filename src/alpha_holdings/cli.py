@@ -288,13 +288,23 @@ def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str
     sleeve_tickers = {CORE_TICKER}
     if regime.regime is MacroRegimeType.BEAR:
         sleeve_tickers.add(DEFENSIVE_TICKER)
-    sleeve_tickers.update(
-        recommendation.etf_ticker.strip().upper()
+    sleeve_results = {
+        ticker: etfs_mod.fetch_validated_etf(
+            ticker,
+            clock=fund_mod.DEFAULT_CLOCK,
+        )
+        for ticker in sorted(sleeve_tickers)
+    }
+    selected_etf_results = {
+        recommendation.etf_ticker.strip().upper(): recommendation.to_market_data(
+            observed_at=fund_mod.DEFAULT_CLOCK(),
+        )
         for recommendation in etf_recs.values()
         if recommendation.recommendation is ETFRecommendationType.ETF_SUFFICIENT
         and recommendation.etf_ticker
-    )
-    sleeve_results = fund_mod.fetch_batch(sorted(sleeve_tickers))
+        and recommendation.selected_evidence is not None
+    }
+    sleeve_results.update(selected_etf_results)
     fund_results.update(sleeve_results)
     _print_market_data_issues(sleeve_results)
     fund_data.update(
@@ -332,6 +342,7 @@ def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str
         scores=scores,
         market_data=fund_results,
         allocation=allocation,
+        etf_recommendations=etf_recs,
         created_at=fund_mod.DEFAULT_CLOCK(),
         model_configuration={
             "scoring_model": llm_mod.get_model(mini=True),
@@ -756,6 +767,17 @@ def backtest(from_date: str | None, to_date: str | None, benchmark: str, validat
     tiers = result["tier_analysis"]
     score_val = result["score_validation"]
     conf = result["confidence_analysis"]
+    missing_tickers = sorted(
+        set(returns.get("missing_tickers", []))
+        | set(risk.get("missing_tickers", []))
+    )
+    if missing_tickers:
+        console.print(
+            "[yellow]Incomplete portfolio analysis; missing data for: "
+            + ", ".join(missing_tickers)
+            + ".[/yellow]"
+        )
+        console.print()
 
     # --- Per-ticker table ---
     table = Table(title="Per-Ticker Returns", show_lines=True)
@@ -1345,6 +1367,7 @@ def _print_opportunities(
 def _print_sell_discipline(since: str) -> None:
     """Load allocation from a date and show returns + sell signals."""
     import json as json_mod
+    from alpha_holdings.backtest import _allocation_positions
     from alpha_holdings.fundamentals import fetch
 
     alloc_path = Path(f"data/allocations/{since}_allocation.json")
@@ -1357,7 +1380,7 @@ def _print_sell_discipline(since: str) -> None:
         return
 
     alloc_data = json_mod.loads(alloc_path.read_text())
-    entries = alloc_data.get("entries", [])
+    positions, _authoritative = _allocation_positions(alloc_data)
 
     table = Table(title=f"Returns Since {since}", show_lines=True)
     table.add_column("Ticker", style="bold")
@@ -1366,40 +1389,59 @@ def _print_sell_discipline(since: str) -> None:
     table.add_column("Return %", justify="right")
     table.add_column("Signal", max_width=50)
 
-    for entry in entries:
-        entry_prices = entry.get("entry_prices", {})
-        for ticker, ep in entry_prices.items():
-            if not ep or ep <= 0:
-                continue
-            try:
-                observation = fetch(ticker)
-                f = observation.data
-                if f is None:
-                    continue
-                cp = f.current_price
-                if not cp:
-                    continue
-                ret = (cp - ep) / ep * 100
-                ret_str = f"[green]+{ret:.1f}%[/green]" if ret >= 0 else f"[red]{ret:.1f}%[/red]"
-
-                # Sell discipline signals
-                signal = ""
-                if ret > 50:
-                    signal = "[yellow]📈 Up >50% — review whether to take profits[/yellow]"
-                elif ret > 30 and f.drawdown_from_peak and f.drawdown_from_peak < -10:
-                    signal = "[yellow]📉 Up >30% from entry but declining from peak — consider trimming[/yellow]"
-                elif ret < -20:
-                    signal = "[red]⚠ Down >20% — review thesis validity[/red]"
-
+    for position in positions:
+        ticker = position.ticker
+        entry_price = position.entry_price
+        if not entry_price or entry_price <= 0:
+            table.add_row(ticker, "N/A", "N/A", "N/A", "[red]Invalid entry price[/red]")
+            continue
+        try:
+            observation = fetch(ticker)
+            fundamentals = observation.data
+            current_price = fundamentals.current_price if fundamentals else None
+            if not current_price:
                 table.add_row(
                     ticker,
-                    f"${ep:.2f}",
-                    f"${cp:.2f}",
-                    ret_str,
-                    signal,
+                    f"${entry_price:.2f}",
+                    "N/A",
+                    "N/A",
+                    f"[red]Market data {observation.status.value}[/red]",
                 )
-            except Exception:
-                pass
+                continue
+            return_pct = (current_price - entry_price) / entry_price * 100
+            return_text = (
+                f"[green]+{return_pct:.1f}%[/green]"
+                if return_pct >= 0
+                else f"[red]{return_pct:.1f}%[/red]"
+            )
+
+            signal = ""
+            if return_pct > 50:
+                signal = "[yellow]📈 Up >50% — review whether to take profits[/yellow]"
+            elif (
+                return_pct > 30
+                and fundamentals.drawdown_from_peak
+                and fundamentals.drawdown_from_peak < -10
+            ):
+                signal = "[yellow]📉 Up >30% from entry but declining from peak — consider trimming[/yellow]"
+            elif return_pct < -20:
+                signal = "[red]⚠ Down >20% — review thesis validity[/red]"
+
+            table.add_row(
+                ticker,
+                f"${entry_price:.2f}",
+                f"${current_price:.2f}",
+                return_text,
+                signal,
+            )
+        except Exception as exc:
+            table.add_row(
+                ticker,
+                f"${entry_price:.2f}",
+                "N/A",
+                "N/A",
+                f"[red]Market data unavailable: {exc}[/red]",
+            )
 
     console.print(table)
 

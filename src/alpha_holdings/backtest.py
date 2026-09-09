@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import statistics
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -127,6 +128,69 @@ def _get_period_return(ticker: str, start: datetime, end: datetime) -> Optional[
     return None
 
 
+@dataclass(frozen=True)
+class _AllocationPosition:
+    ticker: str
+    weight_pct: float
+    entry_price: float | None
+    sleeve: str
+    theme: str
+
+
+def _allocation_positions(alloc: dict) -> tuple[list[_AllocationPosition], bool]:
+    """Normalize current positions and legacy entries at one compatibility seam."""
+    raw_positions = alloc.get("positions") or []
+    if raw_positions:
+        themes_by_ticker = {
+            ticker.strip().upper(): entry.get("theme", "?")
+            for entry in alloc.get("entries", [])
+            for ticker in entry.get("tickers", entry.get("vehicle", "").split(","))
+            if ticker.strip()
+        }
+        positions = []
+        for position in raw_positions:
+            if position.get("instrument_type") == "cash":
+                continue
+            ticker = position.get("ticker", "").strip().upper()
+            if not ticker:
+                continue
+            sleeve = position.get("sleeve", "?")
+            positions.append(
+                _AllocationPosition(
+                    ticker=ticker,
+                    weight_pct=float(position.get("weight_pct", 0)),
+                    entry_price=position.get("entry_price"),
+                    sleeve=sleeve,
+                    theme=themes_by_ticker.get(ticker, str(sleeve).capitalize()),
+                )
+            )
+        return positions, True
+
+    positions = []
+    for entry in alloc.get("entries", []):
+        tickers = [
+            ticker.strip().upper()
+            for ticker in entry.get("tickers", entry.get("vehicle", "").split(","))
+            if ticker.strip()
+        ]
+        count = max(len(tickers), 1)
+        prices = {
+            ticker.upper(): price
+            for ticker, price in entry.get("entry_prices", {}).items()
+        }
+        for ticker in tickers:
+            positions.append(
+                _AllocationPosition(
+                    ticker=ticker,
+                    weight_pct=float(entry.get("pct_allocation", 0)) / count,
+                    entry_price=prices.get(ticker),
+                    sleeve="thematic",
+                    theme=entry.get("theme", "?"),
+                )
+            )
+    return positions, False
+
+
 # ---------------------------------------------------------------------------
 # Core return computation
 # ---------------------------------------------------------------------------
@@ -145,62 +209,107 @@ def compute_returns(
     start = datetime.strptime(from_date, "%Y%m%d")
     end = datetime.strptime(to_date, "%Y%m%d") if to_date else datetime.utcnow()
 
+    positions, authoritative = _allocation_positions(alloc)
     ticker_returns: list[dict] = []
-    total_thematic_pct = 0.0
+    for position in positions:
+        current_price = _get_current_price(position.ticker)
+        return_pct = None
+        if (
+            position.entry_price
+            and position.entry_price > 0
+            and current_price
+            and current_price > 0
+        ):
+            return_pct = round(
+                (current_price - position.entry_price) / position.entry_price * 100,
+                2,
+            )
+        ticker_returns.append(
+            {
+                "ticker": position.ticker,
+                "theme": position.theme,
+                "entry_price": position.entry_price,
+                "current_price": current_price,
+                "return_pct": return_pct,
+                "weight_pct": round(position.weight_pct, 2),
+                "sleeve": position.sleeve,
+            }
+        )
 
-    for entry in alloc.get("entries", []):
-        entry_prices = entry.get("entry_prices", {})
-        theme = entry.get("theme", "?")
-        pct = entry.get("pct_allocation", 0)
-        tickers_in_vehicle = [t.strip() for t in entry.get("vehicle", "").split(",")]
-        n_tickers = max(len(tickers_in_vehicle), 1)
-
-        for ticker in tickers_in_vehicle:
-            ticker = ticker.strip()
-            if not ticker:
-                continue
-
-            ep = entry_prices.get(ticker)
-            cp = _get_current_price(ticker)
-
-            ret_pct = None
-            if ep and ep > 0 and cp and cp > 0:
-                ret_pct = round((cp - ep) / ep * 100, 2)
-
-            ticker_weight = pct / n_tickers
-            total_thematic_pct += ticker_weight
-
-            ticker_returns.append({
-                "ticker": ticker,
-                "theme": theme,
-                "entry_price": ep,
-                "current_price": cp,
-                "return_pct": ret_pct,
-                "weight_pct": round(ticker_weight, 2),
-            })
-
-    # Portfolio weighted return (thematic portion only)
-    weighted_return = 0.0
-    valid_weight = 0.0
-    for tr in ticker_returns:
-        if tr["return_pct"] is not None:
-            weighted_return += tr["return_pct"] * tr["weight_pct"]
-            valid_weight += tr["weight_pct"]
-
-    portfolio_return = round(weighted_return / max(valid_weight, 1), 2) if valid_weight > 0 else 0.0
-
-    core_pct = alloc.get("core_pct", 60)
-    core_return = _get_period_return(benchmark, start, end)
-
-    thematic_share = total_thematic_pct / 100.0
-    core_share = core_pct / 100.0
-    blended_return = round(
-        portfolio_return * thematic_share + (core_return or 0) * core_share,
-        2,
+    valid_returns = [
+        row for row in ticker_returns if row["return_pct"] is not None
+    ]
+    missing_tickers = sorted(
+        row["ticker"] for row in ticker_returns if row["return_pct"] is None
+    )
+    thematic_returns = [
+        row
+        for row in valid_returns
+        if row.get("sleeve") == "thematic"
+    ]
+    thematic_missing = any(
+        row["return_pct"] is None and row.get("sleeve") == "thematic"
+        for row in ticker_returns
+    )
+    thematic_weight = sum(row["weight_pct"] for row in thematic_returns)
+    portfolio_return = (
+        round(
+            sum(row["return_pct"] * row["weight_pct"] for row in thematic_returns)
+            / thematic_weight,
+            2,
+        )
+        if thematic_weight > 0 and not thematic_missing
+        else None if thematic_missing else 0.0
     )
 
+    if authoritative:
+        core_returns = [
+            row for row in valid_returns if row.get("sleeve") == "core"
+        ]
+        core_missing = any(
+            row["return_pct"] is None and row.get("sleeve") == "core"
+            for row in ticker_returns
+        )
+        core_weight = sum(row["weight_pct"] for row in core_returns)
+        core_return = (
+            round(
+                sum(row["return_pct"] * row["weight_pct"] for row in core_returns)
+                / core_weight,
+                2,
+            )
+            if core_weight > 0 and not core_missing
+            else None
+        )
+        funded_weight = sum(position.weight_pct for position in positions)
+        blended_return = (
+            round(
+                sum(row["return_pct"] * row["weight_pct"] for row in valid_returns)
+                / funded_weight,
+                2,
+            )
+            if funded_weight > 0 and not missing_tickers
+            else None
+        )
+    else:
+        core_pct = alloc.get("core_pct", 60)
+        core_return = _get_period_return(benchmark, start, end)
+        thematic_share = sum(position.weight_pct for position in positions) / 100.0
+        core_share = core_pct / 100.0
+        blended_return = (
+            round(
+                portfolio_return * thematic_share + core_return * core_share,
+                2,
+            )
+            if portfolio_return is not None and core_return is not None
+            else None
+        )
+
     benchmark_return = _get_period_return(benchmark, start, end)
-    alpha = round(blended_return - (benchmark_return or 0), 2) if benchmark_return is not None else None
+    alpha = (
+        round(blended_return - benchmark_return, 2)
+        if blended_return is not None and benchmark_return is not None
+        else None
+    )
 
     max_drawdown = 0.0
     for tr in ticker_returns:
@@ -218,6 +327,8 @@ def compute_returns(
         "benchmark_return": benchmark_return,
         "alpha": alpha,
         "max_drawdown": round(max_drawdown, 2),
+        "incomplete": bool(missing_tickers),
+        "missing_tickers": missing_tickers,
     }
 
 
@@ -238,26 +349,44 @@ def theme_attribution(
         confidence_map[t.get("name", "")] = t.get("confidence_score", 0)
 
     results: list[dict] = []
+    positions, _authoritative = _allocation_positions(alloc)
+    by_theme: dict[str, list[_AllocationPosition]] = {}
+    for position in positions:
+        if position.sleeve == "thematic":
+            by_theme.setdefault(position.theme, []).append(position)
 
-    for entry in alloc.get("entries", []):
-        theme_name = entry.get("theme", "?")
-        pct = entry.get("pct_allocation", 0)
-        entry_prices = entry.get("entry_prices", {})
-        tickers = [t.strip() for t in entry.get("vehicle", "").split(",") if t.strip()]
-        n = max(len(tickers), 1)
+    for theme_name, theme_positions in by_theme.items():
+        pct = sum(position.weight_pct for position in theme_positions)
+        weighted_returns: list[tuple[float, float]] = []
+        missing = 0
+        for position in theme_positions:
+            current_price = _get_current_price(position.ticker)
+            if (
+                position.entry_price
+                and position.entry_price > 0
+                and current_price
+                and current_price > 0
+            ):
+                weighted_returns.append(
+                    (
+                        (current_price - position.entry_price)
+                        / position.entry_price
+                        * 100,
+                        position.weight_pct,
+                    )
+                )
+            else:
+                missing += 1
 
-        ticker_rets: list[float] = []
-        for ticker in tickers:
-            ep = entry_prices.get(ticker)
-            cp = _get_current_price(ticker)
-            if ep and ep > 0 and cp and cp > 0:
-                ticker_rets.append((cp - ep) / ep * 100)
-
-        avg_ret = statistics.mean(ticker_rets) if ticker_rets else None
+        avg_ret = (
+            sum(value * weight for value, weight in weighted_returns) / pct
+            if pct > 0 and not missing
+            else None
+        )
 
         # Get average composite score for this theme
         theme_scores = scores.get(theme_name, [])
-        allocated_tickers = {t.upper() for t in tickers}
+        allocated_tickers = {position.ticker for position in theme_positions}
         relevant = [s for s in theme_scores if s.get("ticker", "").upper() in allocated_tickers]
         avg_score = (
             statistics.mean(s["composite_score"] for s in relevant)
@@ -272,8 +401,8 @@ def theme_attribution(
             "contribution": round(avg_ret * pct / 100, 3) if avg_ret is not None else None,
             "confidence": confidence_map.get(theme_name, 0),
             "avg_score": round(avg_score, 1) if avg_score is not None else None,
-            "n_tickers": len(tickers),
-            "tickers_with_data": len(ticker_rets),
+            "n_tickers": len(theme_positions),
+            "tickers_with_data": len(weighted_returns),
         })
 
     results.sort(key=lambda r: r.get("contribution") or -999, reverse=True)
@@ -307,11 +436,12 @@ def tier_analysis(
                 if full and tier:
                     ticker_tier[full.upper()] = tier
 
-    # Collect entry prices from allocation
-    entry_price_map: dict[str, float] = {}
-    for entry in alloc.get("entries", []):
-        for ticker, price in entry.get("entry_prices", {}).items():
-            entry_price_map[ticker.upper()] = price
+    positions, _authoritative = _allocation_positions(alloc)
+    entry_price_map = {
+        position.ticker: position.entry_price
+        for position in positions
+        if position.entry_price is not None
+    }
 
     # Build per-tier return lists
     tier_data: dict[str, list[dict]] = {
@@ -351,21 +481,33 @@ def tier_analysis(
             })
 
     # Also include allocated tickers that may not be in scores
-    for entry in alloc.get("entries", []):
-        for ticker in [t.strip() for t in entry.get("vehicle", "").split(",") if t.strip()]:
-            upper = ticker.upper()
-            if upper in seen_tickers:
-                continue
-            seen_tickers.add(upper)
-            tier = ticker_tier.get(upper, "")
-            if tier not in tier_data:
-                continue
-            ep = entry_price_map.get(upper)
-            cp = _get_current_price(ticker)
-            ret = None
-            if ep and ep > 0 and cp and cp > 0:
-                ret = round((cp - ep) / ep * 100, 2)
-            tier_data[tier].append({"ticker": ticker, "return_pct": ret, "composite_score": None})
+    for position in positions:
+        ticker = position.ticker
+        if ticker in seen_tickers:
+            continue
+        seen_tickers.add(ticker)
+        tier = ticker_tier.get(ticker, "")
+        if tier not in tier_data:
+            continue
+        current_price = _get_current_price(ticker)
+        return_pct = None
+        if (
+            position.entry_price
+            and position.entry_price > 0
+            and current_price
+            and current_price > 0
+        ):
+            return_pct = round(
+                (current_price - position.entry_price) / position.entry_price * 100,
+                2,
+            )
+        tier_data[tier].append(
+            {
+                "ticker": ticker,
+                "return_pct": return_pct,
+                "composite_score": None,
+            }
+        )
 
     tier_labels = {
         "tier_1_demand_driver": "Tier 1 — Demand Drivers",
@@ -408,10 +550,12 @@ def score_validation(
     - Spread (top − bottom)
     """
     # Collect all scored tickers with entry prices
-    entry_price_map: dict[str, float] = {}
-    for entry in alloc.get("entries", []):
-        for ticker, price in entry.get("entry_prices", {}).items():
-            entry_price_map[ticker.upper()] = price
+    positions, _authoritative = _allocation_positions(alloc)
+    entry_price_map = {
+        position.ticker: position.entry_price
+        for position in positions
+        if position.entry_price is not None
+    }
 
     rows: list[dict] = []
     seen: set[str] = set()
@@ -566,19 +710,15 @@ def compute_risk_metrics(
     end = datetime.strptime(to_date, "%Y%m%d") if to_date else datetime.utcnow()
     days_elapsed = (end - start).days
 
-    # Collect all tickers with weights
-    positions: list[tuple[str, float, float]] = []  # (ticker, weight_pct, entry_price)
-    for entry in alloc.get("entries", []):
-        entry_prices = entry.get("entry_prices", {})
-        pct = entry.get("pct_allocation", 0)
-        tickers = [t.strip() for t in entry.get("vehicle", "").split(",") if t.strip()]
-        n = max(len(tickers), 1)
-        for ticker in tickers:
-            ep = entry_prices.get(ticker, 0)
-            positions.append((ticker, pct / n, ep))
+    positions, _authoritative = _allocation_positions(alloc)
 
-    all_tickers = [p[0] for p in positions] + [benchmark]
+    all_tickers = [position.ticker for position in positions] + [benchmark]
     prices = fetch_price_history(list(set(all_tickers)), start, end)
+    missing_tickers = sorted(
+        position.ticker
+        for position in positions
+        if position.ticker not in prices or len(prices[position.ticker]) < 2
+    )
 
     # Build daily portfolio return series
     daily_returns: list[float] = []
@@ -590,14 +730,18 @@ def compute_risk_metrics(
         benchmark_daily = bm_rets.tolist()
 
     # Weighted portfolio daily returns
-    if positions:
-        total_weight = sum(p[1] for p in positions)
+    if positions and not missing_tickers:
+        total_weight = sum(position.weight_pct for position in positions)
         if total_weight > 0:
             # Get common dates across all position tickers
             pos_series: list[tuple[float, pd.Series]] = []
-            for ticker, weight, ep in positions:
-                if ticker in prices and len(prices[ticker]) >= 2:
-                    pos_series.append((weight / total_weight, prices[ticker].pct_change().dropna()))
+            for position in positions:
+                pos_series.append(
+                    (
+                        position.weight_pct / total_weight,
+                        prices[position.ticker].pct_change().dropna(),
+                    )
+                )
 
             if pos_series:
                 # Align on common dates
@@ -614,6 +758,8 @@ def compute_risk_metrics(
     result: dict = {
         "days_elapsed": days_elapsed,
         "trading_days": len(daily_returns),
+        "incomplete": bool(missing_tickers),
+        "missing_tickers": missing_tickers,
     }
 
     if daily_returns:
