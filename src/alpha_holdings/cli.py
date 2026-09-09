@@ -801,6 +801,7 @@ def backtest(from_date: str | None, to_date: str | None, benchmark: str, validat
     theme_attr = result["theme_attribution"]
     tiers = result["tier_analysis"]
     score_val = result["score_validation"]
+    score_summary = result.get("score_validation_summary", {})
     conf = result["confidence_analysis"]
     missing_tickers = sorted(
         set(returns.get("missing_tickers", []))
@@ -959,6 +960,25 @@ def backtest(from_date: str | None, to_date: str | None, benchmark: str, validat
     if validate and score_val:
         console.print()
         console.rule("[bold]Score Validation — Do Scores Predict Returns?[/bold]")
+        horizon_min = score_summary.get("horizon_days_min")
+        horizon_max = score_summary.get("horizon_days_max")
+        horizon = (
+            f"{horizon_min}–{horizon_max} days"
+            if horizon_min is not None and horizon_max is not None
+            else "N/A"
+        )
+        console.print(
+            "[dim]Validation coverage: "
+            f"{score_summary.get('cohort_count', 0)} cohort(s), "
+            f"{score_summary.get('observation_count', 0)} observation(s), "
+            f"{score_summary.get('forward_return_coverage_pct', 0):.1f}% with forward returns, "
+            f"horizon {horizon}.[/dim]"
+        )
+        console.print(
+            f"[dim]Duplicate policy: {score_summary.get('duplicate_ticker_policy', 'N/A')}.[/dim]"
+        )
+        for limitation in score_summary.get("limitations", []):
+            console.print(f"[yellow]Limitation: {limitation}.[/yellow]")
         sv_table = Table(title="Score → Return Correlation", show_lines=True)
         sv_table.add_column("Dimension", style="bold")
         sv_table.add_column("N", justify="right")
@@ -984,17 +1004,24 @@ def backtest(from_date: str | None, to_date: str | None, benchmark: str, validat
                 else:
                     signal = "[red]✗ inverted[/red]"
 
-            spread = sv.get("spread", 0)
-            spread_str = f"[green]+{spread:.1f}pp[/green]" if spread > 0 else f"[red]{spread:.1f}pp[/red]"
+            spread = sv.get("spread")
+            if spread is None:
+                spread_str = "N/A"
+            else:
+                spread_str = (
+                    f"[green]+{spread:.1f}pp[/green]"
+                    if spread > 0
+                    else f"[red]{spread:.1f}pp[/red]"
+                )
 
             top_ret = sv["top_quartile_return"]
             bot_ret = sv["bottom_quartile_return"]
             sv_table.add_row(
                 sv["label"],
-                str(sv["n_companies"]),
+                str(sv.get("n_observations", sv["n_companies"])),
                 rho_str,
-                f"{top_ret:+.1f}%",
-                f"{bot_ret:+.1f}%",
+                f"{top_ret:+.1f}%" if top_ret is not None else "N/A",
+                f"{bot_ret:+.1f}%" if bot_ret is not None else "N/A",
                 spread_str,
                 signal,
             )
@@ -1023,6 +1050,17 @@ def backtest(from_date: str | None, to_date: str | None, benchmark: str, validat
             console.print(conf_table)
     elif validate:
         console.print()
+        if score_summary:
+            console.print(
+                "[dim]Score-validation coverage: "
+                f"{score_summary.get('cohort_count', 0)} cohort(s), "
+                f"{score_summary.get('observation_count', 0)} observation(s), "
+                f"{score_summary.get('forward_return_coverage_pct', 0):.1f}% with forward returns, "
+                f"horizon {score_summary.get('horizon_days_min', 'N/A')}–"
+                f"{score_summary.get('horizon_days_max', 'N/A')} days.[/dim]"
+            )
+            for limitation in score_summary.get("limitations", []):
+                console.print(f"[yellow]Limitation: {limitation}.[/yellow]")
         console.print("[yellow]Not enough scored tickers with return data for score validation yet.[/yellow]")
 
     # --- Track record maturity ---

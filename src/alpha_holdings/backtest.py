@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import statistics
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -38,13 +39,20 @@ PERFORMANCE_ASSUMPTIONS = {
 
 
 def list_snapshots() -> list[str]:
-    """List available allocation dates (YYYYMMDD)."""
-    if not ALLOC_DIR.exists():
-        return []
-    return sorted(
-        f.stem.replace("_allocation", "")
-        for f in ALLOC_DIR.glob("*_allocation.json")
+    """List available versioned or compatibility snapshot dates."""
+    dates: set[str] = set()
+    if ALLOC_DIR.exists():
+        dates.update(
+            f.stem.replace("_allocation", "")
+            for f in ALLOC_DIR.glob("*_allocation.json")
+        )
+    from alpha_holdings.snapshots import RunSnapshotRepository
+
+    dates.update(
+        snapshot.created_at.strftime("%Y%m%d")
+        for snapshot in RunSnapshotRepository().list_complete()
     )
+    return sorted(dates)
 
 
 def load_allocation(date_str: str) -> Optional[dict]:
@@ -71,17 +79,126 @@ def load_themes(date_str: str) -> list[dict]:
     return json.loads(path.read_text())
 
 
-def load_snapshot(date_str: str) -> dict | None:
-    """Load a full snapshot: allocation + scores + themes."""
+def _legacy_snapshot(date_str: str) -> dict | None:
+    """Load one compatibility snapshot from the pre-versioned files."""
     alloc = load_allocation(date_str)
     if not alloc:
         return None
     return {
         "date": date_str,
+        "source": "legacy",
         "allocation": alloc,
         "scores": load_scores(date_str),
         "themes": load_themes(date_str),
     }
+
+
+def _versioned_snapshot_dict(snapshot, date_str: str | None = None) -> dict:
+    """Project a versioned snapshot into the backtest compatibility shape."""
+    return {
+        "date": date_str or snapshot.created_at.strftime("%Y%m%d"),
+        "source": "versioned",
+        "run_id": snapshot.run_id,
+        "created_at": snapshot.created_at.isoformat(),
+        "allocation": snapshot.allocation.model_dump(mode="json"),
+        "scores": {
+            theme: [score.model_dump(mode="json") for score in theme_scores]
+            for theme, theme_scores in snapshot.candidate_scores.items()
+        },
+        "themes": [theme.model_dump(mode="json") for theme in snapshot.themes],
+        "prices": {
+            ticker: price.model_dump(mode="json")
+            for ticker, price in snapshot.prices.items()
+        },
+    }
+
+
+def load_snapshot(date_str: str) -> dict | None:
+    """Load the versioned run for a date, falling back to legacy files."""
+    from alpha_holdings.snapshots import RunSnapshotRepository
+
+    matching = [
+        snapshot
+        for snapshot in RunSnapshotRepository().list_complete()
+        if snapshot.created_at.strftime("%Y%m%d") == date_str
+    ]
+    if matching:
+        return _versioned_snapshot_dict(
+            max(matching, key=lambda snapshot: snapshot.created_at)
+        )
+    return _legacy_snapshot(date_str)
+
+
+def _cohort_from_snapshot(snapshot: dict, fallback_id: str) -> dict:
+    """Extract the score and same-run entry-price cohort from a snapshot."""
+    allocation = snapshot.get("allocation") or {}
+    entry_prices: dict[str, float] = {}
+    entry_dates: dict[str, object] = {}
+
+    def add_entry_price(ticker: str, price, observed_at=None) -> None:
+        try:
+            numeric = float(price)
+        except (TypeError, ValueError):
+            return
+        if ticker and math.isfinite(numeric) and numeric > 0:
+            entry_prices[ticker.strip().upper()] = numeric
+            if observed_at is not None:
+                entry_dates[ticker.strip().upper()] = observed_at
+
+    for position in allocation.get("positions", []):
+        ticker = str(position.get("ticker", "")).strip().upper()
+        price = position.get("entry_price")
+        add_entry_price(ticker, price, position.get("price_timestamp"))
+    for entry in allocation.get("entries", []):
+        for ticker, price in (entry.get("entry_prices") or {}).items():
+            add_entry_price(str(ticker), price)
+
+    persisted_prices = snapshot.get("prices") or {}
+    for ticker, persisted in persisted_prices.items():
+        if isinstance(persisted, dict):
+            price = persisted.get("price")
+            observed_at = persisted.get("observed_at")
+        else:
+            price = getattr(persisted, "price", None)
+            observed_at = getattr(persisted, "observed_at", None)
+        add_entry_price(str(ticker), price, observed_at)
+
+    captured_at = snapshot.get("created_at") or snapshot.get("date") or fallback_id
+    cohort_id = str(snapshot.get("run_id") or fallback_id)
+    return {
+        "cohort_id": cohort_id,
+        "captured_at": captured_at,
+        "scores": snapshot.get("scores") or {},
+        "entry_prices": entry_prices,
+        "entry_dates": entry_dates,
+        "requires_dated_entry_prices": snapshot.get("source") == "legacy",
+    }
+
+
+def load_score_cohorts() -> list[dict]:
+    """Load all independent scored cohorts, preferring versioned runs."""
+    from alpha_holdings.snapshots import RunSnapshotRepository
+
+    cohorts: list[dict] = []
+    versioned = RunSnapshotRepository().list_complete()
+    versioned_dates = {
+        snapshot.created_at.strftime("%Y%m%d") for snapshot in versioned
+    }
+    for snapshot in versioned:
+        cohorts.append(
+            _cohort_from_snapshot(
+                _versioned_snapshot_dict(snapshot),
+                snapshot.run_id,
+            )
+        )
+
+    for date_str in list_snapshots():
+        if date_str in versioned_dates:
+            continue
+        snapshot = _legacy_snapshot(date_str)
+        if snapshot is not None:
+            cohorts.append(_cohort_from_snapshot(snapshot, date_str))
+    return cohorts
 
 
 # ---------------------------------------------------------------------------
@@ -779,6 +896,350 @@ def tier_analysis(
 # ---------------------------------------------------------------------------
 
 
+_SCORE_DIMENSIONS = (
+    ("composite_score", "Composite (overall)"),
+    ("fundamental_score", "Fundamental (40%)"),
+    ("thesis_alignment_score", "Thesis alignment† (30%)"),
+    ("pricing_gap_score", "Pricing gap† (30%)"),
+)
+_DUPLICATE_TICKER_POLICY = (
+    "one observation per ticker per cohort; repeated tickers across cohorts "
+    "remain independent, and repeated scores within a cohort are averaged"
+)
+
+
+def _as_dict(value) -> dict:
+    if isinstance(value, dict):
+        return value
+    model_dump = getattr(value, "model_dump", None)
+    if model_dump is None:
+        return {}
+    return model_dump(mode="json")
+
+
+def _parse_cohort_date(value) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not value:
+        return None
+    text = str(value)
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            return datetime.strptime(text[:8], "%Y%m%d")
+        except ValueError:
+            return None
+
+
+def _cohort_dates(cohort: dict) -> list[datetime]:
+    values = [cohort.get("captured_at"), *(cohort.get("entry_dates") or {}).values()]
+    return [parsed for value in values if (parsed := _parse_cohort_date(value))]
+
+
+def _cohort_scores(cohort: dict) -> list[dict]:
+    """Collapse repeated ticker scores within one cohort deterministically."""
+    by_ticker: dict[str, list[dict]] = {}
+    for score_list in (cohort.get("scores") or {}).values():
+        for raw_score in score_list:
+            score = _as_dict(raw_score)
+            ticker = str(score.get("ticker", "")).strip().upper()
+            if ticker:
+                by_ticker.setdefault(ticker, []).append(score)
+
+    dimensions = [dimension for dimension, _label in _SCORE_DIMENSIONS]
+    collapsed: list[dict] = []
+    for ticker in sorted(by_ticker):
+        scores = by_ticker[ticker]
+        combined = {"ticker": ticker}
+        for dimension in dimensions:
+            values = []
+            for score in scores:
+                value = score.get(dimension)
+                if value is None:
+                    continue
+                try:
+                    numeric = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(numeric):
+                    values.append(numeric)
+            if values:
+                combined[dimension] = statistics.mean(values)
+        collapsed.append(combined)
+    return collapsed
+
+
+def _cohort_entry_prices(cohort: dict) -> dict[str, float]:
+    prices: dict[str, float] = {}
+    for ticker, price in (cohort.get("entry_prices") or {}).items():
+        try:
+            numeric = float(price)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(numeric) and numeric > 0:
+            prices[str(ticker).strip().upper()] = numeric
+    return prices
+
+
+def _score_validation_observations(
+    cohorts: list[dict],
+    prices: PricePanel | None,
+    end: datetime,
+) -> tuple[list[dict], dict]:
+    observations: list[dict] = []
+    candidate_count = 0
+    entry_price_count = 0
+    missing_entry_price = 0
+    missing_dated_entry_price = 0
+    missing_forward_return = 0
+    future_cohort_count = 0
+    cohorts_with_candidates = 0
+    cohorts_with_observations: set[str] = set()
+
+    for cohort in cohorts:
+        cohort_id = str(cohort.get("cohort_id") or "unknown")
+        scores = _cohort_scores(cohort)
+        candidate_count += len(scores)
+        if scores:
+            cohorts_with_candidates += 1
+        entry_prices = _cohort_entry_prices(cohort)
+        captured_at = _parse_cohort_date(cohort.get("captured_at") or cohort_id)
+        entry_dates = cohort.get("entry_dates") or {}
+        requires_dated_entry = bool(cohort.get("requires_dated_entry_prices"))
+
+        for score in scores:
+            ticker = score["ticker"]
+            entry_price = entry_prices.get(ticker)
+            if entry_price is None:
+                missing_entry_price += 1
+                continue
+            entry_price_count += 1
+            entry_date = _parse_cohort_date(entry_dates.get(ticker))
+            if requires_dated_entry and entry_date is None:
+                missing_dated_entry_price += 1
+                continue
+            entry_date = entry_date or captured_at
+            if entry_date is not None and entry_date.date() > end.date():
+                future_cohort_count += 1
+                continue
+            if prices is None:
+                current_price = _get_current_price(ticker)
+                return_pct = (
+                    round((current_price - entry_price) / entry_price * 100, 2)
+                    if current_price and current_price > 0
+                    else None
+                )
+            else:
+                _start_price, current_price, return_pct = _panel_return(
+                    ticker,
+                    prices,
+                    entry_date or end,
+                    end,
+                    entry_price,
+                )
+            if return_pct is None:
+                missing_forward_return += 1
+                continue
+
+            horizon_days = (
+                (end.date() - entry_date.date()).days
+                if entry_date is not None
+                else None
+            )
+            observations.append(
+                {
+                    **score,
+                    "ticker": ticker,
+                    "cohort_id": cohort_id,
+                    "entry_price": entry_price,
+                    "return_pct": return_pct,
+                    "horizon_days": horizon_days,
+                }
+            )
+            cohorts_with_observations.add(cohort_id)
+
+    horizon_values = sorted(
+        observation["horizon_days"]
+        for observation in observations
+        if observation.get("horizon_days") is not None
+    )
+    limitations: list[str] = []
+    if missing_entry_price:
+        limitations.append(
+            f"{missing_entry_price} scored candidate(s) lacked a same-run entry price"
+        )
+    if missing_dated_entry_price:
+        limitations.append(
+            f"{missing_dated_entry_price} scored candidate(s) lacked a dated same-run entry price"
+        )
+    if missing_forward_return:
+        limitations.append(
+            f"{missing_forward_return} observation(s) lacked an end-date adjusted price"
+        )
+    if future_cohort_count:
+        limitations.append(
+            f"{future_cohort_count} candidate(s) were captured after the requested end date"
+        )
+    if len(observations) < 4:
+        limitations.append("At least four observations are required for a useful rank signal")
+
+    summary = {
+        "cohort_count": len(cohorts),
+        "cohorts_with_candidates": cohorts_with_candidates,
+        "cohorts_with_observations": len(cohorts_with_observations),
+        "candidate_count": candidate_count,
+        "observations_with_entry_price": entry_price_count,
+        "observations_with_dated_entry_price": (
+            entry_price_count - missing_dated_entry_price
+        ),
+        "observation_count": len(observations),
+        "forward_return_coverage_pct": round(
+            len(observations) / candidate_count * 100,
+            1,
+        ) if candidate_count else 0.0,
+        "horizon_days_min": horizon_values[0] if horizon_values else None,
+        "horizon_days_max": horizon_values[-1] if horizon_values else None,
+        "duplicate_ticker_policy": _DUPLICATE_TICKER_POLICY,
+        "limitations": limitations,
+    }
+    return observations, summary
+
+
+def score_validation_report(
+    alloc: dict,
+    scores: dict[str, list[dict]],
+    *,
+    prices: PricePanel | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    cohorts: list[dict] | None = None,
+) -> dict:
+    """Return score validation dimensions plus cohort coverage metadata.
+
+    A cohort is one persisted scoring run. Candidate scores are paired only
+    with the entry prices captured by that same run. Repeated tickers inside a
+    cohort are averaged once; the same ticker in later cohorts remains a new
+    observation. If no persisted cohort is available, the report fails closed
+    rather than inferring entry prices from selected portfolio positions.
+    """
+    end = datetime.strptime(to_date, "%Y%m%d") if to_date else datetime.utcnow()
+    if cohorts is None:
+        cohorts = load_score_cohorts()
+        if not cohorts:
+            fallback_id = from_date or end.strftime("%Y%m%d")
+            cohorts = [
+                {
+                    "cohort_id": fallback_id,
+                    "captured_at": fallback_id,
+                    "scores": scores,
+                    "entry_prices": {},
+                    "requires_dated_entry_prices": True,
+                }
+            ]
+
+    if prices is None:
+        tickers = sorted(
+            {
+                score["ticker"]
+                for cohort in cohorts
+                for score in _cohort_scores(cohort)
+            }
+        )
+        earliest = min(
+            (
+                captured
+                for captured in (
+                    date.replace(tzinfo=None)
+                    for cohort in cohorts
+                    for date in _cohort_dates(cohort)
+                )
+            ),
+            default=datetime.strptime(from_date, "%Y%m%d")
+            if from_date
+            else end,
+        )
+        prices = fetch_price_history(tickers, earliest, end)
+
+    observations, summary = _score_validation_observations(cohorts, prices, end)
+    results: list[dict] = []
+    for key, label in _SCORE_DIMENSIONS:
+        valid = [
+            observation
+            for observation in observations
+            if observation.get(key) is not None
+        ]
+        if not valid:
+            continue
+
+        returns = [float(observation["return_pct"]) for observation in valid]
+        score_values = [float(observation[key]) for observation in valid]
+        rho = _spearman(score_values, returns)
+        if rho is None:
+            top_average = None
+            bottom_average = None
+            spread = None
+        else:
+            sorted_by_score = sorted(
+                valid,
+                key=lambda observation: (
+                    -float(observation[key]),
+                    observation["cohort_id"],
+                    observation["ticker"],
+                ),
+            )
+            q_size = max(len(sorted_by_score) // 4, 1)
+            top_average = statistics.mean(
+                observation["return_pct"] for observation in sorted_by_score[:q_size]
+            )
+            bottom_average = statistics.mean(
+                observation["return_pct"] for observation in sorted_by_score[-q_size:]
+            )
+            spread = top_average - bottom_average
+        horizon_values = sorted(
+            observation["horizon_days"]
+            for observation in valid
+            if observation.get("horizon_days") is not None
+        )
+        row_summary = dict(summary)
+        row_summary.update(
+            {
+                "observation_count": len(valid),
+                "forward_return_coverage_pct": round(
+                    len(valid) / summary["candidate_count"] * 100,
+                    1,
+                ) if summary["candidate_count"] else 0.0,
+            }
+        )
+        row_limitations = list(summary["limitations"])
+        missing_dimension_scores = summary["observation_count"] - len(valid)
+        if missing_dimension_scores:
+            row_limitations.append(
+                f"{missing_dimension_scores} observation(s) lacked a usable {key}"
+            )
+        results.append(
+            {
+                "dimension": key,
+                "label": label,
+                "n_companies": len({observation["ticker"] for observation in valid}),
+                "n_observations": len(valid),
+                "cohort_count": len({observation["cohort_id"] for observation in valid}),
+                "rank_correlation": round(rho, 3) if rho is not None else None,
+                "top_quartile_return": round(top_average, 2) if top_average is not None else None,
+                "bottom_quartile_return": round(bottom_average, 2) if bottom_average is not None else None,
+                "spread": round(spread, 2) if spread is not None else None,
+                "horizon_days_min": horizon_values[0] if horizon_values else None,
+                "horizon_days_max": horizon_values[-1] if horizon_values else None,
+                "sufficient_data": len(valid) >= 4,
+                "coverage": row_summary,
+                "duplicate_ticker_policy": _DUPLICATE_TICKER_POLICY,
+                "limitations": row_limitations,
+            }
+        )
+
+    return {"dimensions": results, "summary": summary}
+
+
 def score_validation(
     alloc: dict,
     scores: dict[str, list[dict]],
@@ -786,119 +1247,21 @@ def score_validation(
     prices: PricePanel | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
+    cohorts: list[dict] | None = None,
 ) -> list[dict]:
-    """Test whether composite & component scores predict forward returns.
-
-    For each scoring dimension, compute:
-    - Spearman rank correlation vs forward return
-    - Top-quartile vs bottom-quartile average return
-    - Spread (top − bottom)
-    """
-    start = datetime.strptime(from_date, "%Y%m%d") if from_date else None
-    end = datetime.strptime(to_date, "%Y%m%d") if to_date else None
-
-    # Collect scored tickers with persisted entry prices. The later cohort
-    # validation ticket can broaden this universe without changing the
-    # historical pricing seam here.
-    positions, _authoritative = _allocation_positions(alloc)
-    entry_price_map = {
-        position.ticker: position.entry_price
-        for position in positions
-        if position.entry_price is not None
-    }
-    if prices is None and start is not None and end is not None:
-        prices = fetch_price_history(
-            _analysis_tickers(alloc, scores, []),
-            start,
-            end,
-        )
-
-    rows: list[dict] = []
-    seen: set[str] = set()
-
-    for theme_name, score_list in scores.items():
-        for s in score_list:
-            ticker = s.get("ticker", "")
-            upper = ticker.upper()
-            if upper in seen:
-                continue
-            seen.add(upper)
-
-            ep = entry_price_map.get(upper)
-            if not ep or ep <= 0:
-                continue
-            if prices is None:
-                cp = _get_current_price(ticker)
-                if not cp or cp <= 0:
-                    continue
-                ret = round((cp - ep) / ep * 100, 2)
-            else:
-                assert start is not None and end is not None
-                _start_price, cp, ret = _panel_return(
-                    upper,
-                    prices,
-                    start,
-                    end,
-                    ep,
-                )
-                if ret is None:
-                    continue
-            rows.append({
-                "ticker": ticker,
-                "return_pct": ret,
-                "composite_score": s.get("composite_score"),
-                "fundamental_score": s.get("fundamental_score"),
-                "thesis_alignment_score": s.get("thesis_alignment_score"),
-                "pricing_gap_score": s.get("pricing_gap_score"),
-            })
-
-    if len(rows) < 4:
-        return []
-
-    results: list[dict] = []
-    dimensions = [
-        ("composite_score", "Composite (overall)"),
-        ("fundamental_score", "Fundamental (40%)"),
-        ("thesis_alignment_score", "Thesis alignment† (30%)"),
-        ("pricing_gap_score", "Pricing gap† (30%)"),
-    ]
-
-    for key, label in dimensions:
-        # Filter to rows with this score
-        valid = [(r["return_pct"], r[key]) for r in rows if r.get(key) is not None]
-        if len(valid) < 4:
-            continue
-
-        returns = [v[0] for v in valid]
-        score_vals = [v[1] for v in valid]
-
-        # Spearman rank correlation
-        rho = _spearman(score_vals, returns)
-
-        # Quartile analysis
-        sorted_by_score = sorted(valid, key=lambda v: v[1], reverse=True)
-        q_size = max(len(sorted_by_score) // 4, 1)
-        top_q = [v[0] for v in sorted_by_score[:q_size]]
-        bottom_q = [v[0] for v in sorted_by_score[-q_size:]]
-
-        top_avg = statistics.mean(top_q)
-        bottom_avg = statistics.mean(bottom_q)
-
-        results.append({
-            "dimension": key,
-            "label": label,
-            "n_companies": len(valid),
-            "rank_correlation": round(rho, 3) if rho is not None else None,
-            "top_quartile_return": round(top_avg, 2),
-            "bottom_quartile_return": round(bottom_avg, 2),
-            "spread": round(top_avg - bottom_avg, 2),
-        })
-
-    return results
+    """Test whether scores predict forward returns across independent cohorts."""
+    return score_validation_report(
+        alloc,
+        scores,
+        prices=prices,
+        from_date=from_date,
+        to_date=to_date,
+        cohorts=cohorts,
+    )["dimensions"]
 
 
 def _spearman(x: list[float], y: list[float]) -> Optional[float]:
-    """Compute Spearman rank correlation between two lists."""
+    """Compute Spearman as Pearson correlation over average ranks."""
     n = len(x)
     if n < 3:
         return None
@@ -923,9 +1286,17 @@ def _spearman(x: list[float], y: list[float]) -> Optional[float]:
 
     rx = _rank(x)
     ry = _rank(y)
-
-    d_sq = sum((rx[i] - ry[i]) ** 2 for i in range(n))
-    return 1 - (6 * d_sq) / (n * (n * n - 1))
+    mean_x = statistics.mean(rx)
+    mean_y = statistics.mean(ry)
+    numerator = sum(
+        (rank_x - mean_x) * (rank_y - mean_y)
+        for rank_x, rank_y in zip(rx, ry)
+    )
+    denominator_x = math.sqrt(sum((rank_x - mean_x) ** 2 for rank_x in rx))
+    denominator_y = math.sqrt(sum((rank_y - mean_y) ** 2 for rank_y in ry))
+    if denominator_x == 0 or denominator_y == 0:
+        return None
+    return numerator / (denominator_x * denominator_y)
 
 
 # ---------------------------------------------------------------------------
@@ -1168,9 +1539,28 @@ def full_backtest(
 
     start = datetime.strptime(from_date, "%Y%m%d")
     end = datetime.strptime(resolved_to_date, "%Y%m%d")
+    if snapshot.get("source") in {"legacy", "versioned"}:
+        cohorts = load_score_cohorts()
+    else:
+        cohorts = [
+            _cohort_from_snapshot(snapshot, from_date)
+        ]
+    if not cohorts:
+        cohorts = [_cohort_from_snapshot(snapshot, from_date)]
+    cohort_dates = [
+        date.replace(tzinfo=None)
+        for cohort in cohorts
+        for date in _cohort_dates(cohort)
+    ]
+    validation_start = min([start, *cohort_dates])
+    validation_tickers = {
+        score["ticker"]
+        for cohort in cohorts
+        for score in _cohort_scores(cohort)
+    }
     prices = fetch_price_history(
-        _analysis_tickers(alloc, scores, themes, benchmark),
-        start,
+        sorted(set(_analysis_tickers(alloc, scores, themes, benchmark)) | validation_tickers),
+        validation_start,
         end,
     )
 
@@ -1206,12 +1596,13 @@ def full_backtest(
     )
 
     # 4. Score validation
-    score_val = score_validation(
+    score_validation_result = score_validation_report(
         alloc,
         scores,
         prices=prices,
         from_date=from_date,
         to_date=resolved_to_date,
+        cohorts=cohorts,
     )
 
     # 5. Confidence analysis
@@ -1232,7 +1623,8 @@ def full_backtest(
         "returns": returns,
         "theme_attribution": theme_attr,
         "tier_analysis": tiers,
-        "score_validation": score_val,
+        "score_validation": score_validation_result["dimensions"],
+        "score_validation_summary": score_validation_result["summary"],
         "confidence_analysis": conf,
         "risk_metrics": risk,
     }

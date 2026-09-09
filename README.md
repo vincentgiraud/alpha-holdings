@@ -182,7 +182,7 @@ alpha-holdings backtest --validate               # Include score validation anal
 - Portfolio summary: thematic, core, defensive, and cash returns; blended return, alpha, Sharpe ratio, max drawdown, win rate, and data coverage by instrument count and portfolio weight
 - Theme attribution: which themes contributed most to P&L, ranked by contribution
 - Tier analysis: avg/median returns by Tier 1 / 2 / 3 — tests the "sell shovels" thesis
-- Score validation (`--validate`): Spearman rank correlation + top/bottom quartile spread for each scoring dimension (composite, fundamental, thesis alignment, pricing gap)
+- Score validation (`--validate`): Spearman rank correlation + top/bottom quartile spread for each scoring dimension (composite, fundamental, thesis alignment, pricing gap), across all persisted scoring cohorts
 - Confidence analysis (`--validate`): whether high-confidence themes outperform low-confidence
 
 **Options:**
@@ -201,6 +201,14 @@ transaction-cost, FX, cash-return, and risk-free-rate assumptions. If any
 funded instrument lacks historical data, the analysis names the missing ticker
 and reports coverage by instrument count and portfolio weight instead of
 silently reweighting the remaining positions.
+
+Score validation uses every scored candidate captured in each persisted versioned
+run, including candidates that were not selected for allocation. A ticker is
+counted once per cohort (scores repeated across themes in one run are averaged),
+while the same ticker in separate runs remains an independent observation. The
+report states cohort count, observation count, forward-return coverage, horizon,
+and any missing-entry-price or missing-end-price limitations. Constant score or
+return vectors produce an unavailable rank correlation.
 
 **Limitations:** Backtesting only works from when themes were first saved. Cannot simulate past runs retroactively. Statistical significance requires 3+ months and multiple snapshots. Past performance does not predict future results.
 

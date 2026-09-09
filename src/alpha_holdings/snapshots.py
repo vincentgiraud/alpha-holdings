@@ -249,13 +249,7 @@ class RunSnapshotRepository:
 
     def load_latest(self) -> RunSnapshot | None:
         """Load the newest complete run, falling back to legacy storage."""
-        versioned: list[RunSnapshot] = []
-        if self.runs_dir.exists():
-            for path in self.runs_dir.glob("*.json"):
-                snapshot = self._load_versioned(path)
-                if snapshot is not None and snapshot.completeness.is_complete:
-                    versioned.append(snapshot)
-
+        versioned = self.list_complete()
         if versioned:
             return max(versioned, key=lambda item: _timestamp(item.created_at))
 
@@ -271,6 +265,17 @@ class RunSnapshotRepository:
         if not legacy:
             return None
         return max(legacy, key=lambda item: _timestamp(item.created_at))
+
+    def list_complete(self) -> list[RunSnapshot]:
+        """Return all complete versioned runs in chronological order."""
+        if not self.runs_dir.exists():
+            return []
+        snapshots = []
+        for path in self.runs_dir.glob("*.json"):
+            snapshot = self._load_versioned(path)
+            if snapshot is not None and snapshot.completeness.is_complete:
+                snapshots.append(snapshot)
+        return sorted(snapshots, key=lambda item: _timestamp(item.created_at))
 
     @staticmethod
     def _load_versioned(path: Path) -> RunSnapshot | None:
