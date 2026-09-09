@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from types import SimpleNamespace
 
 from click.testing import CliRunner
 
-from alpha_holdings import fundamentals, snapshots, themes
+from alpha_holdings import fundamentals, snapshots
 from alpha_holdings.cli import cli
 from alpha_holdings.models import (
     Company,
@@ -86,29 +84,26 @@ def _theme(*tickers: str) -> ThemeThesis:
 def _snapshot(theme: ThemeThesis):
     return SimpleNamespace(
         themes=[theme],
+        candidate_scores={
+            theme.name: [
+                {
+                    "ticker": company.full_ticker,
+                    "composite_score": 80.0,
+                    "fundamental_score": 80.0,
+                    "thesis_alignment_score": 80.0,
+                    "pricing_gap_score": 80.0,
+                    "alignment_reasoning": "Strong fit.",
+                    "pricing_gap_reasoning": "Reasonable valuation.",
+                    "revenue_exposure_reasoning": "Relevant revenue exposure.",
+                }
+                for company in theme.all_companies
+            ]
+        },
         allocation=SimpleNamespace(
             entries=[SimpleNamespace(theme=theme.name, tickers=[c.full_ticker for c in theme.all_companies])],
             model_dump=lambda **kwargs: {"entries": []},
         ),
     )
-
-
-def _save_scores(*tickers: str) -> None:
-    score_dir = Path("data/scores")
-    score_dir.mkdir(parents=True)
-    scores = {
-        "Test Theme": [
-            {
-                "ticker": ticker,
-                "composite_score": 80.0,
-                "fundamental_score": 80.0,
-                "thesis_alignment_score": 80.0,
-                "pricing_gap_score": 80.0,
-            }
-            for ticker in tickers
-        ]
-    }
-    (score_dir / "20260908_scores.json").write_text(json.dumps(scores))
 
 
 def test_opportunities_reports_unavailable_analysis_and_failed_tickers(
@@ -161,11 +156,14 @@ def test_watchlist_excludes_failed_tickers_and_marks_partial_analysis(
     monkeypatch.setattr(
         fundamentals, "DEFAULT_PROVIDER", PartiallyAvailableWatchlistProvider()
     )
+    theme = _theme("GOOD", "BAD")
+    monkeypatch.setattr(
+        snapshots, "RunSnapshotRepository",
+        lambda: SimpleNamespace(load_latest=lambda: _snapshot(theme)),
+    )
     runner = CliRunner()
 
     with runner.isolated_filesystem():
-        themes.save_themes([_theme("GOOD", "BAD")])
-        _save_scores("GOOD", "BAD")
         result = runner.invoke(cli, ["watchlist"])
 
     assert result.exit_code == 0
@@ -174,3 +172,18 @@ def test_watchlist_excludes_failed_tickers_and_marks_partial_analysis(
     assert result.output.count("BAD") == 1
     assert "GOOD" in result.output
     assert "Watchlist" in result.output
+
+
+def test_explain_reads_scores_from_the_versioned_snapshot(monkeypatch) -> None:
+    theme = _theme("GOOD")
+    monkeypatch.setattr(
+        snapshots, "RunSnapshotRepository",
+        lambda: SimpleNamespace(load_latest=lambda: _snapshot(theme)),
+    )
+
+    with CliRunner().isolated_filesystem():
+        result = CliRunner().invoke(cli, ["explain"])
+
+    assert result.exit_code == 0
+    assert "Test Theme" in result.output
+    assert "Strong fit." in result.output

@@ -18,14 +18,17 @@ from alpha_holdings.models import (
     InstrumentMetadata,
     InstrumentPrice,
     InstrumentType,
+    MacroRegimeType,
     RUN_SNAPSHOT_SECTIONS,
     PortfolioAllocation,
     PriceBasis,
+    RiskAppetite,
     RunSnapshot,
     SnapshotCompleteness,
     SnapshotSourceFormat,
     ThemeScore,
     ThemeThesis,
+    TimeHorizon,
 )
 
 
@@ -294,12 +297,18 @@ class RunSnapshotRepository:
         if not allocation_path.exists():
             return None
         try:
-            allocation = PortfolioAllocation.model_validate_json(allocation_path.read_text())
+            raw_allocation = json.loads(allocation_path.read_text())
+            try:
+                allocation = PortfolioAllocation.model_validate(raw_allocation)
+            except ValidationError:
+                allocation = _adapt_legacy_allocation(raw_allocation, date_str)
             created_at = allocation.generated_at or datetime.strptime(date_str, "%Y%m%d").replace(tzinfo=UTC)
-        except (OSError, ValidationError, ValueError):
+        except (OSError, json.JSONDecodeError, ValidationError, TypeError, ValueError):
             return None
 
         available = ["allocation"]
+        if allocation.positions:
+            available.append("positions")
         themes: list[ThemeThesis] = []
         candidate_scores: dict[str, list[ThemeScore]] = {}
 
@@ -331,6 +340,7 @@ class RunSnapshotRepository:
             created_at=created_at,
             themes=themes,
             candidate_scores=candidate_scores,
+            positions=allocation.positions,
             allocation=allocation,
             completeness=SnapshotCompleteness(
                 source_format=SnapshotSourceFormat.LEGACY,
@@ -339,6 +349,109 @@ class RunSnapshotRepository:
                 missing_sections=missing,
             ),
         )
+
+
+def _adapt_legacy_allocation(raw: dict, date_str: str) -> PortfolioAllocation:
+    """Adapt older allocation JSON into an explicit-position compatibility model."""
+    data = dict(raw)
+    data.setdefault(
+        "risk_profile",
+        {"appetite": RiskAppetite.MODERATE.value, "time_horizon": TimeHorizon.MEDIUM.value},
+    )
+    data.setdefault(
+        "macro_regime",
+        {
+            "regime": MacroRegimeType.NEUTRAL.value,
+            "confidence": 5,
+            "drivers": ["Legacy snapshot did not persist a macro regime."],
+        },
+    )
+    data.setdefault("generated_at", datetime.strptime(date_str, "%Y%m%d").replace(tzinfo=UTC))
+
+    raw_positions = data.get("positions") or []
+    if not raw_positions:
+        return PortfolioAllocation.model_validate(data)
+
+    # Positions are authoritative when a partially migrated legacy file has
+    # grouped entries whose weights or vehicle strings no longer agree.
+    positions = [dict(position) for position in raw_positions]
+    core_pct = sum(
+        float(position.get("weight_pct", 0))
+        for position in positions
+        if position.get("sleeve") == "core"
+    )
+    defensive_pct = sum(
+        float(position.get("weight_pct", 0))
+        for position in positions
+        if position.get("sleeve") == "defensive"
+    )
+    cash_pct = sum(
+        float(position.get("weight_pct", 0))
+        for position in positions
+        if position.get("sleeve") == "cash" or position.get("instrument_type") == "cash"
+    )
+    thematic = {
+        str(position["ticker"]).strip().upper(): float(position.get("weight_pct", 0))
+        for position in positions
+        if position.get("sleeve") == "thematic"
+    }
+
+    theme_by_ticker: dict[str, str] = {}
+    normalized_entries: list[dict] = []
+    for raw_entry in data.get("entries", []):
+        tickers = [
+            ticker.strip().upper()
+            for ticker in raw_entry.get("tickers", raw_entry.get("vehicle", "").split(","))
+            if ticker.strip()
+        ]
+        matched = [ticker for ticker in tickers if ticker in thematic]
+        if not matched:
+            continue
+        theme = raw_entry.get("theme", "Legacy thematic positions")
+        theme_by_ticker.update({ticker: theme for ticker in matched})
+        normalized_entries.append(
+            {
+                **raw_entry,
+                "theme": theme,
+                "vehicle": ", ".join(matched),
+                "tickers": matched,
+                "pct_allocation": sum(thematic[ticker] for ticker in matched),
+                "entry_method": raw_entry.get("entry_method", "dca"),
+                "rationale": raw_entry.get(
+                    "rationale", "Converted from explicit legacy positions."
+                ),
+                "entry_prices": {
+                    ticker: price
+                    for ticker, price in (raw_entry.get("entry_prices") or {}).items()
+                    if ticker.strip().upper() in matched
+                },
+            }
+        )
+
+    ungrouped = [ticker for ticker in thematic if ticker not in theme_by_ticker]
+    if ungrouped:
+        normalized_entries.append(
+            {
+                "theme": "Legacy thematic positions",
+                "vehicle": ", ".join(ungrouped),
+                "tickers": ungrouped,
+                "vehicle_type": "stocks",
+                "pct_allocation": sum(thematic[ticker] for ticker in ungrouped),
+                "entry_method": "dca",
+                "rationale": "Converted from explicit legacy positions.",
+            }
+        )
+
+    data.update(
+        {
+            "positions": positions,
+            "entries": normalized_entries,
+            "core_pct": core_pct,
+            "defensive_pct": defensive_pct,
+            "cash_pct": cash_pct,
+        }
+    )
+    return PortfolioAllocation.model_validate(data)
 
 
 def _timestamp(value: datetime) -> float:

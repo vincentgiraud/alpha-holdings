@@ -56,7 +56,7 @@ def list_snapshots() -> list[str]:
 
 
 def load_allocation(date_str: str) -> Optional[dict]:
-    """Load a saved allocation by date string (YYYYMMDD)."""
+    """Load a legacy allocation by date string (YYYYMMDD)."""
     path = ALLOC_DIR / f"{date_str}_allocation.json"
     if not path.exists():
         return None
@@ -64,7 +64,7 @@ def load_allocation(date_str: str) -> Optional[dict]:
 
 
 def load_scores(date_str: str) -> dict[str, list[dict]]:
-    """Load saved scores by date string (YYYYMMDD)."""
+    """Load legacy scores by date string (YYYYMMDD)."""
     path = SCORES_DIR / f"{date_str}_scores.json"
     if not path.exists():
         return {}
@@ -72,7 +72,7 @@ def load_scores(date_str: str) -> dict[str, list[dict]]:
 
 
 def load_themes(date_str: str) -> list[dict]:
-    """Load saved themes by date string (YYYYMMDD)."""
+    """Load legacy themes by date string (YYYYMMDD)."""
     path = THEMES_DIR / f"{date_str}_themes.json"
     if not path.exists():
         return []
@@ -84,12 +84,36 @@ def _legacy_snapshot(date_str: str) -> dict | None:
     alloc = load_allocation(date_str)
     if not alloc:
         return None
+    scores = load_scores(date_str)
+    themes = load_themes(date_str)
+    available = ["allocation"]
+    if themes:
+        available.append("themes")
+    if scores:
+        available.append("candidate_scores")
+    sections = [
+        "themes",
+        "candidate_scores",
+        "etf_recommendations",
+        "instrument_metadata",
+        "prices",
+        "positions",
+        "allocation",
+        "model_configuration",
+        "provenance",
+    ]
     return {
         "date": date_str,
         "source": "legacy",
         "allocation": alloc,
-        "scores": load_scores(date_str),
-        "themes": load_themes(date_str),
+        "scores": scores,
+        "themes": themes,
+        "completeness": {
+            "source_format": "legacy",
+            "is_complete": False,
+            "available_sections": [section for section in sections if section in available],
+            "missing_sections": [section for section in sections if section not in available],
+        },
     }
 
 
@@ -114,12 +138,21 @@ def _versioned_snapshot_dict(snapshot, date_str: str | None = None) -> dict:
 
 
 def load_snapshot(date_str: str) -> dict | None:
-    """Load the versioned run for a date, falling back to legacy files."""
+    """Load a versioned run by ID, or a dated legacy compatibility run."""
     from alpha_holdings.snapshots import RunSnapshotRepository
+
+    repository = RunSnapshotRepository()
+    exact = repository.load(date_str)
+    if exact is not None:
+        if exact.completeness.source_format.value == "versioned":
+            if not exact.completeness.is_complete:
+                return None
+            return _versioned_snapshot_dict(exact)
+        return _legacy_snapshot(date_str.removeprefix("legacy-"))
 
     matching = [
         snapshot
-        for snapshot in RunSnapshotRepository().list_complete()
+        for snapshot in repository.list_complete()
         if snapshot.created_at.strftime("%Y%m%d") == date_str
     ]
     if matching:
@@ -1537,16 +1570,17 @@ def full_backtest(
     scores = snapshot["scores"]
     themes = snapshot["themes"]
 
-    start = datetime.strptime(from_date, "%Y%m%d")
+    snapshot_date = snapshot.get("date", from_date)
+    start = datetime.strptime(snapshot_date, "%Y%m%d")
     end = datetime.strptime(resolved_to_date, "%Y%m%d")
     if snapshot.get("source") in {"legacy", "versioned"}:
         cohorts = load_score_cohorts()
     else:
         cohorts = [
-            _cohort_from_snapshot(snapshot, from_date)
+            _cohort_from_snapshot(snapshot, snapshot_date)
         ]
     if not cohorts:
-        cohorts = [_cohort_from_snapshot(snapshot, from_date)]
+        cohorts = [_cohort_from_snapshot(snapshot, snapshot_date)]
     cohort_dates = [
         date.replace(tzinfo=None)
         for cohort in cohorts
@@ -1564,12 +1598,12 @@ def full_backtest(
         end,
     )
 
-    log.info("Running full backtest from %s...", from_date)
+    log.info("Running full backtest from %s...", snapshot_date)
 
     # 1. Basic returns
     returns = compute_returns(
         alloc,
-        from_date,
+        snapshot_date,
         resolved_to_date,
         benchmark,
         prices=prices,
@@ -1581,7 +1615,7 @@ def full_backtest(
         scores,
         themes,
         prices=prices,
-        from_date=from_date,
+        from_date=snapshot_date,
         to_date=resolved_to_date,
     )
 
@@ -1591,7 +1625,7 @@ def full_backtest(
         scores,
         themes,
         prices=prices,
-        from_date=from_date,
+        from_date=snapshot_date,
         to_date=resolved_to_date,
     )
 
@@ -1600,7 +1634,7 @@ def full_backtest(
         alloc,
         scores,
         prices=prices,
-        from_date=from_date,
+        from_date=snapshot_date,
         to_date=resolved_to_date,
         cohorts=cohorts,
     )
@@ -1611,14 +1645,15 @@ def full_backtest(
     # 6. Risk metrics
     risk = compute_risk_metrics(
         alloc,
-        from_date,
+        snapshot_date,
         resolved_to_date,
         benchmark,
         prices=prices,
     )
 
     return {
-        "snapshot_date": from_date,
+        "snapshot_date": snapshot_date,
+        "snapshot_run_id": snapshot.get("run_id"),
         "to_date": resolved_to_date,
         "returns": returns,
         "theme_attribution": theme_attr,

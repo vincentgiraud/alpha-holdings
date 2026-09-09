@@ -169,7 +169,7 @@ def allocate(
         entries.append(
             AllocationEntry(
                 theme=theme.name,
-                vehicle=", ".join(sorted(allocations)),
+                vehicle=(next(iter(sorted(allocations))) if len(allocations) == 1 else ""),
                 tickers=sorted(allocations),
                 vehicle_type=(
                     "etf"

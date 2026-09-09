@@ -110,6 +110,33 @@ class HistoricalDate(click.ParamType):
 HISTORICAL_DATE = HistoricalDate()
 
 
+class SnapshotReference(click.ParamType):
+    """A historical date or an exact persisted run identifier."""
+
+    name = "YYYYMMDD or run id"
+
+    def convert(self, value, param, ctx):
+        raw = str(value)
+        if re.fullmatch(r"[0-9]{8}", raw):
+            return HISTORICAL_DATE.convert(raw, param, ctx)
+        if re.fullmatch(r"[0-9]{8}T[0-9]{12}-[A-Za-z0-9]+", raw):
+            HISTORICAL_DATE.convert(raw[:8], param, ctx)
+            return raw
+        if (
+            re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", raw)
+            and (Path("data/runs") / f"{raw}.json").is_file()
+        ):
+            return raw
+        self.fail(
+            "must be a valid date in YYYYMMDD format or persisted run ID",
+            param,
+            ctx,
+        )
+
+
+SNAPSHOT_REFERENCE = SnapshotReference()
+
+
 class TickerSymbol(click.ParamType):
     """A structurally valid Yahoo-style ticker symbol."""
 
@@ -135,7 +162,7 @@ class OrderedDateRangeCommand(click.Command):
     def invoke(self, ctx: click.Context):
         from_date = ctx.params.get("from_date")
         to_date = ctx.params.get("to_date")
-        if from_date and to_date and to_date < from_date:
+        if from_date and to_date and to_date < from_date[:8]:
             ctx.fail("--to must not be before --from")
         return super().invoke(ctx)
 
@@ -269,6 +296,11 @@ def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str
         raise click.ClickException(
             "Analysis unavailable: no candidate passed data, identity, and scoring validation."
         )
+    candidate_issues = {
+        ticker: result
+        for ticker, result in fund_results.items()
+        if result.status is not MarketDataStatus.AVAILABLE
+    }
     fund_data = {
         ticker: result.data
         for ticker, result in fund_results.items()
@@ -330,6 +362,19 @@ def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str
         _print_supply_chain_tree(t, scores.get(t.name, []), fund_data, etf_recs.get(t.name), base_currency=base_currency.upper())
     _print_allocation(allocation)
 
+    if candidate_issues:
+        details = ", ".join(
+            f"{ticker} ({result.status.value})"
+            for ticker, result in sorted(candidate_issues.items())
+        )
+        console.print(
+            "[yellow]Analysis incomplete: candidate market data was unavailable "
+            f"for {details}; no versioned run was saved.[/yellow]"
+        )
+        console.print()
+        console.print(DISCLAIMER)
+        return
+
     # Atomically publish the coherent run before compatibility files.
     from alpha_holdings import llm as llm_mod
     from alpha_holdings.snapshots import (
@@ -356,11 +401,6 @@ def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str
     RunSnapshotRepository().save(snapshot)
     console.print(f"[dim]Saved versioned run {snapshot.run_id}.[/dim]")
 
-    # Legacy dual-write remains until the expand-contract migration completes.
-    theme_mod.save_themes(themes)
-    _save_allocation(allocation)
-    _save_scores(scores)
-
     console.print()
     console.print(DISCLAIMER)
 
@@ -370,15 +410,15 @@ def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str
 @click.option("--base-currency", type=SUPPORTED_CURRENCY, default="USD", help="Currency used to compare position values.")
 def holdings(file: str, base_currency: str) -> None:
     """Analyze overlap between your existing holdings and the latest saved allocation."""
-    from alpha_holdings.holdings import load_holdings, get_existing_exposure, analyze_overlap
+    from alpha_holdings.holdings import (
+        allocation_to_portfolio,
+        analyze_overlap,
+        get_existing_exposure,
+        load_holdings,
+    )
 
-    # Load latest allocation
-    alloc_path = Path("data/allocations")
-    if not alloc_path.exists():
-        console.print("[yellow]No saved allocations. Run 'discover' first.[/yellow]")
-        return
-    files = sorted(alloc_path.glob("*.json"), reverse=True)
-    if not files:
+    snapshot = _load_latest_snapshot()
+    if snapshot is None:
         console.print("[yellow]No saved allocations. Run 'discover' first.[/yellow]")
         return
 
@@ -386,7 +426,9 @@ def holdings(file: str, base_currency: str) -> None:
     if not existing_portfolio.holdings:
         console.print("[yellow]No holdings found in the file.[/yellow]")
         return
-    proposed_portfolio = load_holdings(files[0])
+    proposed_portfolio = allocation_to_portfolio(
+        snapshot.allocation.model_dump(mode="json")
+    )
     if not proposed_portfolio.holdings:
         console.print("[yellow]Latest allocation has no investable positions.[/yellow]")
         return
@@ -454,15 +496,15 @@ def holdings(file: str, base_currency: str) -> None:
 @click.option("--tier", type=click.Choice(["1", "2", "3"]), default=None, help="Filter to a specific supply chain tier.")
 def explain(theme_filter: str | None, tier: str | None) -> None:
     """Show LLM reasoning behind each company's scores."""
-    from alpha_holdings import themes as theme_mod
     from alpha_holdings.models import SupplyChainTier
 
-    themes = theme_mod.load_latest_themes()
+    snapshot = _load_latest_snapshot()
+    themes = snapshot.themes if snapshot is not None else []
     if not themes:
         console.print("[yellow]No saved themes. Run 'discover' first.[/yellow]")
         return
 
-    scores = _load_scores()
+    scores = _snapshot_scores(snapshot)
     if not scores:
         console.print("[yellow]No saved scores. Run 'discover' first to generate scores with reasoning.[/yellow]")
         return
@@ -475,9 +517,7 @@ def explain(theme_filter: str | None, tier: str | None) -> None:
         pattern = re.compile(r"\b" + re.escape(theme_filter) + r"\b", re.IGNORECASE)
         themes = [t for t in themes if pattern.search(t.name)]
         if not themes:
-            # Fall back to substring match if word-boundary found nothing
-            themes_fallback = theme_mod.load_latest_themes() or []
-            themes = [t for t in themes_fallback if theme_filter.lower() in t.name.lower()]
+            themes = [t for t in snapshot.themes if theme_filter.lower() in t.name.lower()]
         if not themes:
             console.print(f"[yellow]No theme matching '{theme_filter}'.[/yellow]")
             return
@@ -518,13 +558,12 @@ def explain(theme_filter: str | None, tier: str | None) -> None:
 
 @cli.command()
 @click.option("--theme", default=None, help="Re-evaluate a specific theme only.")
-@click.option("--since", type=HISTORICAL_DATE, default=None, help="Date of allocation to track returns from (YYYYMMDD).")
+@click.option("--since", type=SNAPSHOT_REFERENCE, default=None, help="Date (YYYYMMDD) or persisted run ID to track returns from.")
 def monitor(theme: str | None, since: str | None) -> None:
     """Course correction: re-evaluate saved themes against fresh signals."""
     from alpha_holdings import monitor as mon_mod
-    from alpha_holdings.snapshots import RunSnapshotRepository
 
-    snapshot = RunSnapshotRepository().load_latest()
+    snapshot = _load_latest_snapshot()
     if snapshot is None:
         console.print("[yellow]No saved run found. Run 'discover' first.[/yellow]")
         return
@@ -598,9 +637,8 @@ def monitor(theme: str | None, since: str | None) -> None:
 def opportunities(fresh: bool) -> None:
     """Quick scan for dip opportunities across funded themes."""
     from alpha_holdings import monitor as mon_mod
-    from alpha_holdings.snapshots import RunSnapshotRepository
 
-    snapshot = RunSnapshotRepository().load_latest()
+    snapshot = _load_latest_snapshot()
     if snapshot is None:
         console.print("[yellow]No saved run found. Run 'discover' first.[/yellow]")
         return
@@ -641,16 +679,16 @@ def watchlist(theme_filter: str | None, tier: str | None, min_score: float) -> N
     """High-scoring companies not yet on sale — your buy-the-dip watchlist."""
     import re
 
-    from alpha_holdings import themes as theme_mod
     from alpha_holdings.fundamentals import fetch, passes_quality_filter
     from alpha_holdings.scoring import detect_opportunity
 
-    themes = theme_mod.load_latest_themes()
+    snapshot = _load_latest_snapshot()
+    themes = snapshot.themes if snapshot is not None else []
     if not themes:
         console.print("[yellow]No saved themes. Run 'discover' first.[/yellow]")
         return
 
-    scores = _load_scores()
+    scores = _snapshot_scores(snapshot)
     if not scores:
         console.print("[yellow]No saved scores. Run 'discover' first.[/yellow]")
         return
@@ -660,8 +698,7 @@ def watchlist(theme_filter: str | None, tier: str | None, min_score: float) -> N
         pattern = re.compile(r"\b" + re.escape(theme_filter) + r"\b", re.IGNORECASE)
         themes = [t for t in themes if pattern.search(t.name)]
         if not themes:
-            all_themes = theme_mod.load_latest_themes() or []
-            themes = [t for t in all_themes if theme_filter.lower() in t.name.lower()]
+            themes = [t for t in snapshot.themes if theme_filter.lower() in t.name.lower()]
         if not themes:
             console.print(f"[yellow]No theme matching '{theme_filter}'.[/yellow]")
             return
@@ -766,7 +803,7 @@ def watchlist(theme_filter: str | None, tier: str | None, min_score: float) -> N
 
 
 @cli.command(cls=OrderedDateRangeCommand)
-@click.option("--from", "from_date", type=HISTORICAL_DATE, default=None, help="Start date YYYYMMDD (default: earliest allocation).")
+@click.option("--from", "from_date", type=SNAPSHOT_REFERENCE, default=None, help="Start date YYYYMMDD or persisted run ID (default: earliest allocation).")
 @click.option("--to", "to_date", type=HISTORICAL_DATE, default=None, help="End date YYYYMMDD (default: today).")
 @click.option("--benchmark", type=TICKER_SYMBOL, default="SPY", help="Benchmark ticker (default: SPY).")
 @click.option("--validate", is_flag=True, default=False, help="Run score validation analysis (do scores predict returns?).")
@@ -775,6 +812,7 @@ def backtest(from_date: str | None, to_date: str | None, benchmark: str, validat
     from alpha_holdings.backtest import (
         list_snapshots,
         full_backtest,
+        load_snapshot,
     )
 
     snapshots = list_snapshots()
@@ -791,9 +829,23 @@ def backtest(from_date: str | None, to_date: str | None, benchmark: str, validat
     console.print("[dim]Fetching bounded historical adjusted prices...[/dim]")
     console.print()
 
+    selected_snapshot = load_snapshot(from_date)
+    if selected_snapshot is None:
+        console.print(f"[red]No snapshot found for {from_date}. Available: {', '.join(snapshots)}[/red]")
+        console.print(DISCLAIMER)
+        return
+    if selected_snapshot.get("source") == "legacy":
+        missing = selected_snapshot.get("completeness", {}).get("missing_sections", [])
+        missing_detail = f" Missing sections: {', '.join(missing)}." if missing else ""
+        console.print(
+            "[yellow]Loaded a legacy snapshot; backtest results are incomplete "
+            f"where the legacy files lack dated prices or explicit positions.{missing_detail}[/yellow]"
+        )
+
     result = full_backtest(from_date, to_date, benchmark)
     if not result:
         console.print(f"[red]No snapshot found for {from_date}. Available: {', '.join(snapshots)}[/red]")
+        console.print(DISCLAIMER)
         return
 
     returns = result["returns"]
@@ -814,6 +866,15 @@ def backtest(from_date: str | None, to_date: str | None, benchmark: str, validat
             + ".[/yellow]"
         )
         console.print()
+
+    if returns.get("incomplete") or risk.get("incomplete"):
+        console.print(
+            "[yellow]Backtest is incomplete; the portfolio summary is not "
+            "presented as a complete result.[/yellow]"
+        )
+        console.print()
+        console.print(DISCLAIMER)
+        return
 
     # --- Per-ticker table ---
     table = Table(title="Per-Ticker Returns", show_lines=True)
@@ -1109,25 +1170,16 @@ def _add_return_row(table: Table, label: str, value) -> None:
 def show(what: str) -> None:
     """Display saved themes or allocation data."""
     if what == "themes":
-        from alpha_holdings import themes as theme_mod
-        from alpha_holdings.snapshots import RunSnapshotRepository
-
-        snapshot = RunSnapshotRepository().load_latest()
-        themes = snapshot.themes if snapshot is not None else theme_mod.load_latest_themes()
+        snapshot = _load_latest_snapshot()
+        themes = snapshot.themes if snapshot is not None else []
         if themes:
             _print_themes(themes)
         else:
             console.print("[yellow]No saved themes.[/yellow]")
     elif what == "allocation":
-        from alpha_holdings.models import SnapshotSourceFormat
-        from alpha_holdings.snapshots import RunSnapshotRepository
-
-        snapshot = RunSnapshotRepository().load_latest()
+        snapshot = _load_latest_snapshot()
         if snapshot is None:
             console.print("[yellow]No saved allocations.[/yellow]")
-        elif snapshot.completeness.source_format is SnapshotSourceFormat.LEGACY:
-            data = snapshot.allocation.model_dump(mode="json")
-            console.print_json(json.dumps(data, indent=2))
         else:
             data = {
                 "run_id": snapshot.run_id,
@@ -1400,14 +1452,25 @@ def _print_opportunities(
     ticker_alloc: dict[str, tuple[float, float | None]] = {}  # ticker → (pct, $amount or None)
     if alloc_data:
         capital = alloc_data.get("capital")
-        for entry in alloc_data.get("entries", []):
-            pct = entry.get("pct_allocation", 0)
-            tickers = [t.strip() for t in entry.get("vehicle", "").split(",") if t.strip()]
-            n = max(len(tickers), 1)
-            for t in tickers:
-                per_ticker_pct = pct / n
-                per_ticker_amt = capital * per_ticker_pct / 100 if capital else None
-                ticker_alloc[t.upper()] = (per_ticker_pct, per_ticker_amt)
+        positions = alloc_data.get("positions") or []
+        if positions:
+            for position in positions:
+                ticker = str(position.get("ticker", "")).strip().upper()
+                if not ticker or position.get("sleeve") == "cash":
+                    continue
+                ticker_alloc[ticker] = (
+                    float(position.get("weight_pct", 0)),
+                    position.get("capital_amount"),
+                )
+        else:
+            for entry in alloc_data.get("entries", []):
+                pct = entry.get("pct_allocation", 0)
+                tickers = [t.strip() for t in entry.get("vehicle", "").split(",") if t.strip()]
+                n = max(len(tickers), 1)
+                for t in tickers:
+                    per_ticker_pct = pct / n
+                    per_ticker_amt = capital * per_ticker_pct / 100 if capital else None
+                    ticker_alloc[t.upper()] = (per_ticker_pct, per_ticker_amt)
 
     has_amounts = any(v[1] is not None for v in ticker_alloc.values())
 
@@ -1462,20 +1525,21 @@ def _print_opportunities(
 
 def _print_sell_discipline(since: str) -> None:
     """Load allocation from a date and show returns + sell signals."""
-    import json as json_mod
-    from alpha_holdings.backtest import _allocation_positions
+    from alpha_holdings.backtest import _allocation_positions, list_snapshots, load_snapshot
     from alpha_holdings.fundamentals import fetch
 
-    alloc_path = Path(f"data/allocations/{since}_allocation.json")
-    if not alloc_path.exists():
+    snapshot = load_snapshot(since)
+    if snapshot is None:
         console.print(f"[yellow]No allocation found for date {since}. Available:[/yellow]")
-        alloc_dir = Path("data/allocations")
-        if alloc_dir.exists():
-            for f in sorted(alloc_dir.glob("*.json")):
-                console.print(f"  {f.stem}")
+        for available in list_snapshots():
+            console.print(f"  {available}")
         return
 
-    alloc_data = json_mod.loads(alloc_path.read_text())
+    if snapshot.get("source") == "legacy":
+        console.print(
+            "[yellow]Loaded a legacy allocation; dated position data may be incomplete.[/yellow]"
+        )
+    alloc_data = snapshot["allocation"]
     positions, _authoritative = _allocation_positions(alloc_data)
 
     table = Table(title=f"Returns Since {since}", show_lines=True)
@@ -1542,52 +1606,39 @@ def _print_sell_discipline(since: str) -> None:
     console.print(table)
 
 
-def _load_latest_allocation() -> dict | None:
-    """Load the most recent saved allocation as a dict."""
-    path = Path("data/allocations")
-    if not path.exists():
-        return None
-    files = sorted(path.glob("*_allocation.json"), reverse=True)
-    if not files:
-        return None
-    return json.loads(files[0].read_text())
+def _load_latest_snapshot():
+    """Load the newest run, warning when compatibility data is incomplete."""
+    from alpha_holdings.models import SnapshotSourceFormat
+    from alpha_holdings.snapshots import RunSnapshotRepository
+
+    snapshot = RunSnapshotRepository().load_latest()
+    if (
+        snapshot is not None
+        and getattr(getattr(snapshot, "completeness", None), "source_format", None)
+        is SnapshotSourceFormat.LEGACY
+    ):
+        missing = getattr(snapshot.completeness, "missing_sections", [])
+        missing_detail = (
+            f" Missing sections: {', '.join(missing)}."
+            if missing
+            else ""
+        )
+        console.print(
+            f"[yellow]Loaded legacy snapshot {snapshot.run_id}; it is incomplete "
+            f"and is read-only compatibility data.{missing_detail}[/yellow]"
+        )
+    return snapshot
 
 
-def _save_allocation(allocation) -> None:
-    from datetime import datetime
-
-    path = Path("data/allocations")
-    path.mkdir(parents=True, exist_ok=True)
-    f = path / f"{datetime.now().strftime('%Y%m%d')}_allocation.json"
-    f.write_text(allocation.model_dump_json(indent=2))
-
-
-def _save_scores(scores: dict[str, list]) -> None:
-    """Save scores with reasoning to data/scores/ for the explain command."""
-    import json as json_mod
-    from datetime import datetime
-
-    path = Path("data/scores")
-    path.mkdir(parents=True, exist_ok=True)
-    # Convert ThemeScore objects to dicts
-    data = {}
-    for theme_name, score_list in scores.items():
-        data[theme_name] = [s.model_dump(mode="json") if hasattr(s, "model_dump") else s for s in score_list]
-    f = path / f"{datetime.now().strftime('%Y%m%d')}_scores.json"
-    f.write_text(json_mod.dumps(data, indent=2, default=str))
-
-
-def _load_scores() -> dict[str, list[dict]]:
-    """Load the most recent saved scores."""
-    import json as json_mod
-
-    path = Path("data/scores")
-    if not path.exists():
-        return {}
-    files = sorted(path.glob("*_scores.json"), reverse=True)
-    if not files:
-        return {}
-    return json_mod.loads(files[0].read_text())
+def _snapshot_scores(snapshot) -> dict[str, list[dict]]:
+    """Project persisted score models into the command display shape."""
+    return {
+        theme: [
+            score.model_dump(mode="json") if hasattr(score, "model_dump") else score
+            for score in scores
+        ]
+        for theme, scores in snapshot.candidate_scores.items()
+    }
 
 
 if __name__ == "__main__":

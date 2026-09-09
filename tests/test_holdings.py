@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 from click.testing import CliRunner
 
 from alpha_holdings import holdings as holdings_module
@@ -70,6 +72,19 @@ def test_load_holdings_preserves_explicit_allocation_position_weights(tmp_path) 
         ("VT", 90, "USD", 125, NOW),
         ("GRID", 10, "USD", 50, NOW),
     ]
+
+
+def test_yahoo_holdings_provider_fails_closed_without_adjusted_close(monkeypatch) -> None:
+    class RawCloseTicker:
+        info = {"currency": "USD"}
+
+        def history(self, **_kwargs):
+            return pd.DataFrame({"Close": [100.0]})
+
+    monkeypatch.setattr(holdings_module.yf, "Ticker", lambda _ticker: RawCloseTicker())
+
+    with pytest.raises(ValueError, match="adjusted close is unavailable"):
+        YahooHoldingsProvider().get_quote("ACME", NOW)
 
 
 def test_load_holdings_discloses_legacy_group_weight_split(tmp_path) -> None:
@@ -462,3 +477,63 @@ def test_holdings_command_reports_actual_direct_addition(monkeypatch) -> None:
     assert "adds 30.0%" not in result.output
     assert "Proposed exposure coverage: 91.0%" in result.output
     assert "fixture composition is partial" in result.output
+
+
+def test_holdings_command_reads_the_versioned_snapshot(monkeypatch) -> None:
+    class FakeProvider:
+        def get_etf_composition(self, ticker: str, _as_of: datetime):
+            if ticker == "VT":
+                return ETFComposition(
+                    ticker="VT",
+                    holdings={"BETA": 90},
+                    as_of=NOW,
+                    source="fixture",
+                    reason="fixture composition is partial",
+                )
+            return None
+
+    allocation_data = {
+        "positions": [
+            {
+                "ticker": "ACME",
+                "instrument_type": "stock",
+                "sleeve": "thematic",
+                "weight_pct": 10,
+                "currency": "USD",
+                "entry_price": 10,
+                "price_timestamp": NOW.isoformat(),
+            },
+            {
+                "ticker": "VT",
+                "instrument_type": "etf",
+                "sleeve": "core",
+                "weight_pct": 90,
+                "currency": "USD",
+                "entry_price": 100,
+                "price_timestamp": NOW.isoformat(),
+            },
+        ],
+        "entries": [],
+        "core_pct": 90,
+    }
+    snapshot = SimpleNamespace(
+        run_id="20260909T000000-versioned",
+        allocation=SimpleNamespace(model_dump=lambda **kwargs: allocation_data),
+    )
+    monkeypatch.setattr(holdings_module, "DEFAULT_PROVIDER", FakeProvider())
+    monkeypatch.setattr(
+        "alpha_holdings.snapshots.RunSnapshotRepository",
+        lambda: SimpleNamespace(load_latest=lambda: snapshot),
+    )
+
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        existing_path = holdings_module.Path("existing.json")
+        existing_path.write_text(
+            json.dumps([{"ticker": "ACME", "weight_pct": 20}, {"ticker": "OTHER", "weight_pct": 80}])
+        )
+        result = runner.invoke(cli, ["holdings", "--file", str(existing_path)])
+
+    assert result.exit_code == 0
+    assert "Proposed portfolio adds 10.0%" in result.output
+    assert "data/allocations" not in result.output

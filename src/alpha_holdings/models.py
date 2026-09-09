@@ -644,7 +644,11 @@ class RiskProfile(BaseModel):
 
 class AllocationEntry(BaseModel):
     theme: str
-    vehicle: str
+    vehicle: str = Field(
+        default="",
+        exclude=True,
+        description="Legacy display field; explicit tickers are authoritative.",
+    )
     tickers: list[str] = Field(default_factory=list)
     vehicle_type: str = "etf"
     pct_allocation: float
@@ -665,7 +669,7 @@ class AllocationEntry(BaseModel):
         supplied_tickers = [
             ticker.strip().upper() for ticker in self.tickers if ticker.strip()
         ]
-        if supplied_tickers and supplied_tickers != vehicle_tickers:
+        if supplied_tickers and vehicle_tickers and supplied_tickers != vehicle_tickers:
             raise ValueError("allocation entry tickers must match its vehicle")
         self.tickers = supplied_tickers or vehicle_tickers
         return self

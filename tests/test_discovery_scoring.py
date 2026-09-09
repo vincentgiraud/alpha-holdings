@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, date, datetime
+from pathlib import Path
 
 import pytest
 import pandas as pd
@@ -763,6 +764,11 @@ def test_discover_publishes_a_versioned_scored_cohort(monkeypatch) -> None:
     with runner.isolated_filesystem():
         result = runner.invoke(cli, ["discover", "--capital", "10000"])
         snapshot = RunSnapshotRepository().load_latest()
+        legacy_files = [
+            *Path("data/allocations").glob("*.json"),
+            *Path("data/themes").glob("*.json"),
+            *Path("data/scores").glob("*.json"),
+        ]
 
     assert result.exit_code == 0, result.output
     assert snapshot is not None
@@ -779,6 +785,11 @@ def test_discover_publishes_a_versioned_scored_cohort(monkeypatch) -> None:
     assert "GRIDETF" in snapshot.provenance["market_data"]
     assert snapshot.allocation.core_pct == 100
     assert snapshot.allocation.capital == 10_000
+    assert all(
+        "vehicle" not in entry
+        for entry in snapshot.allocation.model_dump(mode="json")["entries"]
+    )
     assert "100.0%" in result.output
     assert "$10,000.00" in result.output
     assert "VT / VOO" not in result.output
+    assert legacy_files == []

@@ -6,7 +6,6 @@ import json
 import logging
 import os
 from datetime import datetime
-from pathlib import Path
 
 import yfinance as yf
 
@@ -27,9 +26,6 @@ from alpha_holdings.prompts.theme_discovery import (
 from alpha_holdings.signals import _extract_json, get_macro_briefing
 
 log = logging.getLogger(__name__)
-
-DATA_DIR = Path("data/themes")
-
 
 def discover_themes(
     signals: list[MacroSignal],
@@ -293,25 +289,3 @@ def _validate_tickers(theme: ThemeThesis) -> None:
             except Exception:
                 log.warning("Dropping unresolvable ticker: %s (%s)", ticker_str, company.name)
         sub.companies = valid
-
-
-def save_themes(themes: list[ThemeThesis]) -> Path:
-    """Persist discovered themes to data/themes/."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    date_str = datetime.now().strftime("%Y%m%d")
-    path = DATA_DIR / f"{date_str}_themes.json"
-    data = [t.model_dump(mode="json") for t in themes]
-    path.write_text(json.dumps(data, indent=2, default=str))
-    log.info("Saved %d themes to %s", len(themes), path)
-    return path
-
-
-def load_latest_themes() -> list[ThemeThesis]:
-    """Load the most recent saved themes."""
-    if not DATA_DIR.exists():
-        return []
-    files = sorted(DATA_DIR.glob("*_themes.json"), reverse=True)
-    if not files:
-        return []
-    data = json.loads(files[0].read_text())
-    return [ThemeThesis(**item) for item in data]

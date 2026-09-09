@@ -370,6 +370,8 @@ def test_show_allocation_still_displays_a_legacy_snapshot() -> None:
     assert result.exit_code == 0
     assert '"core_pct": 100.0' in result.output
     assert "No saved allocations" not in result.output
+    assert "legacy snapshot" in result.output
+    assert "Missing sections:" in result.output
 
 
 def test_show_themes_displays_themes_from_a_versioned_snapshot() -> None:

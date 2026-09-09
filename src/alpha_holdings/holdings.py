@@ -148,8 +148,9 @@ class YahooHoldingsProvider:
         )
         if history is None or history.empty:
             raise ValueError("dated quote is unavailable")
-        column = "Adj Close" if "Adj Close" in history.columns else "Close"
-        series = history[column].dropna()
+        if "Adj Close" not in history.columns:
+            raise ValueError("adjusted close is unavailable")
+        series = history["Adj Close"].dropna()
         if series.empty:
             raise ValueError("dated quote is unavailable")
         info = instrument.info or {}
@@ -287,14 +288,15 @@ def load_holdings(path: str | Path) -> HoldingsPortfolio:
         return HoldingsPortfolio(holdings=[Holding(**h) for h in data])
     # Auto-detect allocation format (current positions or legacy grouped entries).
     if isinstance(data, dict) and ("positions" in data or "entries" in data):
-        return _allocation_to_portfolio(data)
+        return allocation_to_portfolio(data)
     return HoldingsPortfolio(**data)
 
 
-def _allocation_to_portfolio(alloc_data: dict) -> HoldingsPortfolio:
+def allocation_to_portfolio(alloc_data: dict) -> HoldingsPortfolio:
     """Convert a PortfolioAllocation dict into a HoldingsPortfolio.
 
-    Extracts tickers from allocation entries and uses entry_prices as avg_cost.
+    Explicit positions are authoritative; legacy grouped entries are accepted
+    only as a compatibility input and disclose their equal-weight conversion.
     """
     positions = alloc_data.get("positions") or []
     if positions:
@@ -349,6 +351,9 @@ def _allocation_to_portfolio(alloc_data: dict) -> HoldingsPortfolio:
                 instrument_type=instrument_type,
             ))
     return HoldingsPortfolio(holdings=holdings, warnings=warnings)
+
+
+_allocation_to_portfolio = allocation_to_portfolio
 
 
 def get_existing_exposure(

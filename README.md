@@ -77,13 +77,12 @@ Analyze overlap between your existing positions and the latest saved allocation.
 ```bash
 alpha-holdings holdings --file holdings.example.json
 alpha-holdings holdings --file data/my_portfolio.json
-alpha-holdings holdings --file data/allocations/xxxxxxxx_allocation.json  # accepts allocation files directly
 alpha-holdings holdings --file data/my_portfolio.json --base-currency EUR
 ```
 
 Accepts two formats:
 - **Holdings JSON**: `[{"ticker": "VT", "shares": 100, "avg_cost": 95.50}, ...]`; repeated lots are aggregated before weighting.
-- **Allocation JSON**: the `data/allocations/*_allocation.json` files from `discover`; concrete position weights, currency, and dated entry prices are preserved.
+- The latest allocation is loaded from the most recent versioned run snapshot; concrete position weights, currency, and dated entry prices are preserved. If no versioned run exists, a legacy allocation is read through the compatibility loader and marked incomplete.
 
 Share-based portfolios are valued at dated adjusted prices and converted into
 `--base-currency` (default `USD`) with FX observations from the same date before
@@ -135,7 +134,7 @@ alpha-holdings monitor --since 20260425    # Track returns from a specific alloc
 
 **Options:**
 - `--theme` — Re-evaluate a specific theme only.
-- `--since` — Date of a saved allocation (YYYYMMDD) to compute returns from. Shows per-ticker entry price vs current price, return %, and sell discipline signals:
+- `--since` — Date of a saved allocation (YYYYMMDD) or an exact persisted run ID to compute returns from. Shows per-ticker entry price vs current price, return %, and sell discipline signals:
   - **Up >50%** — "Review whether to take profits"
   - **Up >30% but declining from peak** — "Consider trimming"
   - **Down >20%** — "Review thesis validity"
@@ -186,7 +185,7 @@ alpha-holdings backtest --validate               # Include score validation anal
 - Confidence analysis (`--validate`): whether high-confidence themes outperform low-confidence
 
 **Options:**
-- `--from` — Start date YYYYMMDD (default: earliest saved allocation).
+- `--from` — Start date YYYYMMDD or an exact persisted run ID (default: earliest saved allocation).
 - `--to` — End date YYYYMMDD (default: today).
 - `--benchmark` — Benchmark ticker to compare against (default: `SPY`).
 - `--validate` — Run score validation analysis (rank correlation, quartile spreads).
@@ -262,9 +261,8 @@ CLI (click + rich)
 ### Data
 
 All data persisted to `data/` (gitignored):
-- `data/runs/` — atomic, versioned run snapshots with scores, prices, configuration, and provenance
-- `data/themes/` — discovered themes (JSON, dated)
-- `data/allocations/` — allocation snapshots for drift tracking
+- `data/runs/` — atomic, versioned run snapshots with scores, prices, configuration, and provenance (the active persistence boundary)
+- `data/themes/`, `data/allocations/`, and `data/scores/` — read-only legacy compatibility files; new commands do not write them
 - `data/cache/` — fundamentals cache (24h TTL)
 
 ### Design Decisions

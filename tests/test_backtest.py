@@ -1,15 +1,104 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from types import SimpleNamespace
+
 import pandas as pd
 
 from alpha_holdings import backtest as backtest_module
+from alpha_holdings import snapshots
 from alpha_holdings.backtest import (
     compute_returns,
     compute_risk_metrics,
+    load_snapshot,
     score_validation,
     score_validation_report,
     theme_attribution,
 )
+from alpha_holdings.models import SnapshotSourceFormat
+
+
+def test_load_snapshot_can_reproduce_a_specific_versioned_run(monkeypatch) -> None:
+    run_id = "20260908T103000000000-specific"
+    snapshot = SimpleNamespace(
+        run_id=run_id,
+        created_at=datetime(2026, 9, 8, 10, 30, tzinfo=UTC),
+        completeness=SimpleNamespace(
+            source_format=SnapshotSourceFormat.VERSIONED,
+            is_complete=True,
+        ),
+        allocation=SimpleNamespace(model_dump=lambda **_kwargs: {"positions": []}),
+        candidate_scores={},
+        themes=[],
+        prices={},
+    )
+    repository = SimpleNamespace(
+        load=lambda reference: snapshot if reference == run_id else None,
+        list_complete=lambda: [],
+    )
+    monkeypatch.setattr(snapshots, "RunSnapshotRepository", lambda: repository)
+
+    restored = load_snapshot(run_id)
+
+    assert restored is not None
+    assert restored["run_id"] == run_id
+    assert restored["date"] == "20260908"
+
+
+def test_backtest_command_renders_a_deterministic_persisted_result(monkeypatch) -> None:
+    from click.testing import CliRunner
+
+    from alpha_holdings.cli import cli
+
+    result = {
+        "returns": {
+            "ticker_returns": [
+                {
+                    "ticker": "VT",
+                    "theme": "Core",
+                    "weight_pct": 100,
+                    "entry_price": 100,
+                    "current_price": 105,
+                    "return_pct": 5,
+                }
+            ],
+            "thematic_return": None,
+            "core_return": 5,
+            "defensive_return": None,
+            "cash_return": None,
+            "blended_return": 5,
+            "benchmark_return": 4,
+            "alpha": 1,
+            "coverage": {
+                "instruments_with_data": 1,
+                "instruments_total": 1,
+                "weight_with_data_pct": 100,
+                "weight_total_pct": 100,
+            },
+            "assumptions": {},
+        },
+        "risk_metrics": {"days_elapsed": 8, "trading_days": 6},
+        "theme_attribution": [],
+        "tier_analysis": [],
+        "score_validation": [],
+        "score_validation_summary": {},
+        "confidence_analysis": {},
+    }
+    monkeypatch.setattr(backtest_module, "list_snapshots", lambda: ["20260901"])
+    monkeypatch.setattr(
+        backtest_module,
+        "load_snapshot",
+        lambda _reference: {"source": "versioned", "date": "20260901"},
+    )
+    monkeypatch.setattr(backtest_module, "full_backtest", lambda *_args: result)
+
+    response = CliRunner().invoke(
+        cli, ["backtest", "--from", "20260901", "--to", "20260908"]
+    )
+
+    assert response.exit_code == 0, response.output
+    assert "Portfolio Summary" in response.output
+    assert "NOT FINANCIAL ADVICE" in response.output
 
 
 def test_compute_returns_tracks_authoritative_etf_positions(monkeypatch) -> None:
