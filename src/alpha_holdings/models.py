@@ -45,6 +45,8 @@ class OpportunityType(str, Enum):
     RECOVERING = "recovering"
     CAUTION = "caution"
     AVOID = "avoid"
+    NO_SIGNAL = "no_signal"
+    UNAVAILABLE = "unavailable"
 
 
 class MarketDataStatus(str, Enum):
@@ -950,6 +952,17 @@ class ThesisUpdate(BaseModel):
     new_confidence: int
     companies_to_add: list[str] = Field(default_factory=list)
     companies_to_remove: list[str] = Field(default_factory=list)
+
+
+class MonitoringEvent(BaseModel):
+    """An immutable record of one course-correction run."""
+
+    event_id: str = Field(default_factory=lambda: uuid4().hex)
+    source_run_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updates: list[ThesisUpdate]
+    signals: list[OpportunitySignal]
+    pending_company_additions: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class RebalanceSignal(BaseModel):

@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from click.testing import CliRunner
 
-from alpha_holdings import fundamentals, themes
+from alpha_holdings import fundamentals, snapshots, themes
 from alpha_holdings.cli import cli
 from alpha_holdings.models import (
     Company,
@@ -82,6 +83,16 @@ def _theme(*tickers: str) -> ThemeThesis:
     )
 
 
+def _snapshot(theme: ThemeThesis):
+    return SimpleNamespace(
+        themes=[theme],
+        allocation=SimpleNamespace(
+            entries=[SimpleNamespace(theme=theme.name, tickers=[c.full_ticker for c in theme.all_companies])],
+            model_dump=lambda **kwargs: {"entries": []},
+        ),
+    )
+
+
 def _save_scores(*tickers: str) -> None:
     score_dir = Path("data/scores")
     score_dir.mkdir(parents=True)
@@ -104,10 +115,14 @@ def test_opportunities_reports_unavailable_analysis_and_failed_tickers(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(fundamentals, "DEFAULT_PROVIDER", FailingProvider())
+    theme = _theme("FAIL", "MISS")
+    monkeypatch.setattr(
+        snapshots, "RunSnapshotRepository",
+        lambda: SimpleNamespace(load_latest=lambda: _snapshot(theme)),
+    )
     runner = CliRunner()
 
     with runner.isolated_filesystem():
-        themes.save_themes([_theme("FAIL", "MISS")])
         result = runner.invoke(cli, ["opportunities"])
 
     assert result.exit_code == 1
@@ -123,17 +138,21 @@ def test_opportunities_keeps_valid_signals_and_marks_partial_analysis(
     monkeypatch.setattr(
         fundamentals, "DEFAULT_PROVIDER", PartiallyAvailableProvider()
     )
+    theme = _theme("GOOD", "BAD")
+    monkeypatch.setattr(
+        snapshots, "RunSnapshotRepository",
+        lambda: SimpleNamespace(load_latest=lambda: _snapshot(theme)),
+    )
     runner = CliRunner()
 
     with runner.isolated_filesystem():
-        themes.save_themes([_theme("GOOD", "BAD")])
         result = runner.invoke(cli, ["opportunities"])
 
     assert result.exit_code == 0
     assert "Partial analysis" in result.output
     assert "BAD (unavailable)" in result.output
     assert "GOOD" in result.output
-    assert "ON SALE" in result.output
+    assert any(label in result.output for label in ("ON SALE", "STABILIZED", "RECOVERING"))
 
 
 def test_watchlist_excludes_failed_tickers_and_marks_partial_analysis(

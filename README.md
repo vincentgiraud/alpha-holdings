@@ -454,7 +454,19 @@ The `monitor` command re-evaluates saved themes and generates three levels of re
 | **Holding-level** | Company fundamentals deteriorate within a strong theme | Swap to better-positioned company or rotate to theme ETF |
 | **Concentration drift** | A position grew above target weight via price appreciation | Trim to target if thesis softening; accept risk if conviction high |
 
-It also scans for **dip opportunities** — companies that dropped in price but retain strong thesis + fundamentals.
+It also scans funded instruments for **dip opportunities**. Course correction applies
+the new thesis confidence before scanning: invalidated themes produce `AVOID` only,
+and weakened themes produce `CAUTION` rather than a buy recommendation. Specific
+stabilization and recovery checks take precedence over a generic drawdown. Every
+instrument is classified as actionable, caution/avoid, no-signal, or unavailable;
+provider failures are displayed rather than silently omitted.
+
+Each `monitor` run against a versioned discovery snapshot writes an append-only
+event under `data/monitoring-events/`, linked to the source run ID. Suggested
+company additions remain pending until a future discovery run performs the normal
+identity, market-data, and scoring validation; they are never activated directly
+from a course-correction response. The `opportunities` command requires a
+versioned saved run and uses its allocation's theme/instrument scope.
 
 ## Disclaimers & Limitations
 

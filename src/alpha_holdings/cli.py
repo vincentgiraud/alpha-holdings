@@ -522,11 +522,18 @@ def explain(theme_filter: str | None, tier: str | None) -> None:
 def monitor(theme: str | None, since: str | None) -> None:
     """Course correction: re-evaluate saved themes against fresh signals."""
     from alpha_holdings import monitor as mon_mod
-    from alpha_holdings import themes as theme_mod
+    from alpha_holdings.snapshots import RunSnapshotRepository
 
-    themes = theme_mod.load_latest_themes()
+    snapshot = RunSnapshotRepository().load_latest()
+    if snapshot is None:
+        console.print("[yellow]No saved run found. Run 'discover' first.[/yellow]")
+        return
+    themes = mon_mod.funded_themes(
+        snapshot.themes,
+        funded_by_theme=mon_mod.funded_theme_tickers(snapshot.allocation.entries),
+    )
     if not themes:
-        console.print("[yellow]No saved themes found. Run 'discover' first.[/yellow]")
+        console.print("[yellow]No funded themes found in the latest saved allocation.[/yellow]")
         return
 
     if theme:
@@ -550,6 +557,10 @@ def monitor(theme: str | None, since: str | None) -> None:
             f"({update.previous_confidence} → {update.new_confidence}/10): {update.reason}"
         )
 
+    # Apply the evaluation before deriving any downstream signals in this run.
+    themes, pending_additions = mon_mod.apply_thesis_updates(themes, updates)
+    statuses = {update.theme_name: update.status for update in updates}
+
     # Rebalancing signals
     rebal = mon_mod.generate_rebalance_signals(themes, updates)
     if rebal:
@@ -557,9 +568,21 @@ def monitor(theme: str | None, since: str | None) -> None:
 
     # Opportunity scan
     console.rule("[bold]Opportunity Scan[/bold]")
-    scan = mon_mod.scan_opportunities(themes)
+    scan = mon_mod.scan_opportunities(themes, theme_statuses=statuses)
     _print_market_data_issues(scan.market_data)
     _print_opportunities(scan.signals, incomplete=scan.incomplete)
+
+    mon_mod.MonitoringEventRepository().save(mon_mod.MonitoringEvent(
+        source_run_id=snapshot.run_id,
+        updates=updates,
+        signals=scan.signals,
+        pending_company_additions=pending_additions,
+    ))
+    if pending_additions:
+        console.print(
+            "[yellow]Suggested company additions were recorded but not activated; "
+            "they require the normal discovery, market-data, identity, and scoring checks.[/yellow]"
+        )
 
     # Sell discipline: track returns from a saved allocation
     if since:
@@ -575,15 +598,22 @@ def monitor(theme: str | None, since: str | None) -> None:
 def opportunities(fresh: bool) -> None:
     """Quick scan for dip opportunities across funded themes."""
     from alpha_holdings import monitor as mon_mod
-    from alpha_holdings import themes as theme_mod
+    from alpha_holdings.snapshots import RunSnapshotRepository
 
-    themes = theme_mod.load_latest_themes()
+    snapshot = RunSnapshotRepository().load_latest()
+    if snapshot is None:
+        console.print("[yellow]No saved run found. Run 'discover' first.[/yellow]")
+        return
+    themes = mon_mod.funded_themes(
+        snapshot.themes,
+        funded_by_theme=mon_mod.funded_theme_tickers(snapshot.allocation.entries),
+    )
     if not themes:
-        console.print("[yellow]No saved themes found. Run 'discover' first.[/yellow]")
+        console.print("[yellow]No funded themes found in the latest saved allocation.[/yellow]")
         return
 
     # Load latest allocation for position sizing context
-    alloc_data = _load_latest_allocation()
+    alloc_data = snapshot.allocation.model_dump(mode="json")
 
     console.rule("[bold]Opportunity Scan[/bold]")
     if fresh:
@@ -673,8 +703,8 @@ def watchlist(theme_filter: str | None, tier: str | None, min_score: float) -> N
                 theme_name=theme.name,
                 supply_chain_tier=company.supply_chain_tier.value,
             )
-            # Skip if it already has an actionable or warning signal
-            if opp:
+            # Only actionable/warning classifications exclude a waiting candidate.
+            if opp and opp.signal_type is not OpportunityType.NO_SIGNAL:
                 continue
             drawdown = f.drawdown_from_peak
 

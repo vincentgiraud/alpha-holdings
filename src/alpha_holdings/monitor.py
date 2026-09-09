@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -14,6 +16,8 @@ from alpha_holdings.models import (
     FundamentalsResult,
     MacroSignal,
     MarketDataStatus,
+    MonitoringEvent,
+    OpportunityType,
     OpportunitySignal,
     RebalanceAction,
     RebalanceSignal,
@@ -44,6 +48,35 @@ class OpportunityScanResult:
     @property
     def usable_count(self) -> int:
         return sum(result.data is not None for result in self.market_data.values())
+
+
+class MonitoringEventRepository:
+    """Append-only storage for course-correction events."""
+
+    def __init__(self, data_dir: str | Path = "data") -> None:
+        self.events_dir = Path(data_dir) / "monitoring-events"
+
+    def save(self, event: MonitoringEvent) -> Path:
+        self.events_dir.mkdir(parents=True, exist_ok=True)
+        destination = self.events_dir / f"{event.event_id}.json"
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=self.events_dir,
+                prefix=f".{event.event_id}.", suffix=".tmp", delete=False,
+            ) as temporary:
+                temporary_path = Path(temporary.name)
+                temporary.write(event.model_dump_json(indent=2))
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            os.link(temporary_path, destination)
+            temporary_path.unlink()
+            temporary_path = None
+        except Exception:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+            raise
+        return destination
 
 
 def check_thesis(theme: ThemeThesis) -> ThesisUpdate:
@@ -120,22 +153,123 @@ def generate_rebalance_signals(
     return signals
 
 
-def scan_opportunities(themes: list[ThemeThesis], *, skip_cache: bool = False) -> OpportunityScanResult:
+def apply_thesis_updates(
+    themes: list[ThemeThesis], updates: list[ThesisUpdate],
+) -> tuple[list[ThemeThesis], dict[str, list[str]]]:
+    """Apply safe thesis changes; additions stay pending until the discovery pipeline validates them."""
+    by_name = {update.theme_name.casefold(): update for update in updates}
+    revised: list[ThemeThesis] = []
+    pending_additions: dict[str, list[str]] = {}
+    for theme in themes:
+        update = by_name.get(theme.name.casefold())
+        if update is None:
+            revised.append(theme.model_copy(deep=True))
+            continue
+        removals = {ticker.strip().upper() for ticker in update.companies_to_remove}
+        sub_themes = [
+            sub_theme.model_copy(update={
+                "companies": [
+                    company for company in sub_theme.companies
+                    if company.full_ticker.upper() not in removals
+                ]
+            })
+            for sub_theme in theme.sub_themes
+        ]
+        revised.append(theme.model_copy(update={
+            "confidence_score": update.new_confidence,
+            "sub_themes": sub_themes,
+        }))
+        additions = sorted({ticker.strip().upper() for ticker in update.companies_to_add if ticker.strip()})
+        if additions:
+            pending_additions[theme.name] = additions
+    return revised, pending_additions
+
+
+def funded_themes(
+    themes: list[ThemeThesis], *, funded_by_theme: dict[str, set[str]],
+) -> list[ThemeThesis]:
+    """Return a non-mutating view containing only allocated theme instruments."""
+    scoped: list[ThemeThesis] = []
+    for theme in themes:
+        tickers = funded_by_theme.get(theme.name.casefold(), set())
+        if not tickers:
+            continue
+        sub_themes = [
+            sub_theme.model_copy(update={
+                "companies": [
+                    company for company in sub_theme.companies
+                    if company.full_ticker.upper() in tickers
+                ]
+            })
+            for sub_theme in theme.sub_themes
+        ]
+        scoped.append(theme.model_copy(update={"sub_themes": sub_themes}))
+    return scoped
+
+
+def funded_theme_tickers(entries) -> dict[str, set[str]]:
+    """Map every allocated thematic vehicle to its originating theme."""
+    scope: dict[str, set[str]] = {}
+    for entry in entries:
+        scope.setdefault(entry.theme.casefold(), set()).update(
+            ticker.upper() for ticker in entry.tickers
+        )
+    return scope
+
+
+def scan_opportunities(
+    themes: list[ThemeThesis], *, skip_cache: bool = False,
+    theme_statuses: dict[str, ThesisStatus] | None = None,
+) -> OpportunityScanResult:
     """Scan all funded themes for dip opportunities, filtering out low-quality companies."""
     from alpha_holdings.fundamentals import passes_quality_filter
 
     scan = OpportunityScanResult()
+    statuses = {name.casefold(): status for name, status in (theme_statuses or {}).items()}
     for theme in themes:
+        status = statuses.get(theme.name.casefold(), ThesisStatus.UNCHANGED)
         for company in theme.all_companies:
             observation = fetch(company.full_ticker, skip_cache=skip_cache)
             scan.market_data[company.full_ticker] = observation
             f = observation.data
             if f is None:
+                scan.signals.append(OpportunitySignal(
+                    ticker=company.full_ticker,
+                    signal_type=OpportunityType.UNAVAILABLE,
+                    thesis_confidence=theme.confidence_score,
+                    fundamental_health="Unavailable",
+                    recommended_action=(
+                        "Market data unavailable — do not classify this instrument."
+                    ),
+                    theme_name=theme.name,
+                    supply_chain_tier=company.supply_chain_tier.value,
+                ))
+                continue
+            if status is ThesisStatus.INVALIDATED:
+                scan.signals.append(detect_opportunity(
+                    company.full_ticker,
+                    theme.confidence_score,
+                    f,
+                    theme_name=theme.name,
+                    supply_chain_tier=company.supply_chain_tier.value,
+                    thesis_status=status,
+                ))
                 continue
             # Skip companies that fail quality filters
             passes, reason = passes_quality_filter(f)
             if not passes:
                 log.debug("Skipping %s in opportunity scan: %s", company.full_ticker, reason)
+                scan.signals.append(OpportunitySignal(
+                    ticker=company.full_ticker,
+                    signal_type=OpportunityType.CAUTION,
+                    thesis_confidence=theme.confidence_score,
+                    fundamental_health=reason,
+                    current_price=f.current_price,
+                    drawdown_pct=f.drawdown_from_peak,
+                    recommended_action="Fundamentals fail the quality policy — do not add exposure.",
+                    theme_name=theme.name,
+                    supply_chain_tier=company.supply_chain_tier.value,
+                ))
                 continue
             opp = detect_opportunity(
                 company.full_ticker,
@@ -143,7 +277,7 @@ def scan_opportunities(themes: list[ThemeThesis], *, skip_cache: bool = False) -
                 f,
                 theme_name=theme.name,
                 supply_chain_tier=company.supply_chain_tier.value,
+                thesis_status=status,
             )
-            if opp:
-                scan.signals.append(opp)
+            scan.signals.append(opp)
     return scan

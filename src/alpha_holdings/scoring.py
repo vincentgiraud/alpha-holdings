@@ -22,6 +22,7 @@ from alpha_holdings.models import (
     OpportunityType,
     ThemeScore,
     ThemeThesis,
+    ThesisStatus,
     ValuationContext,
     ValuationLevel,
 )
@@ -330,8 +331,9 @@ def detect_opportunity(
     *,
     theme_name: str | None = None,
     supply_chain_tier: str | None = None,
+    thesis_status: ThesisStatus = ThesisStatus.UNCHANGED,
 ) -> Optional[OpportunitySignal]:
-    """Detect entry opportunities: on-sale, stabilized, or recovering."""
+    """Classify an entry observation without allowing invalidated themes to buy."""
     # Assess fundamental health
     health_issues = []
     if fundamentals.revenue_growth_cagr is not None and fundamentals.revenue_growth_cagr < 0:
@@ -355,6 +357,13 @@ def detect_opportunity(
         supply_chain_tier=supply_chain_tier, volume_vs_avg=volume_ratio,
     )
 
+    if thesis_status is ThesisStatus.INVALIDATED:
+        return OpportunitySignal(
+            signal_type=OpportunityType.AVOID,
+            recommended_action="Thesis invalidated — do not add exposure.",
+            **common,
+        )
+
     # AVOID: thesis weak + fundamentals bad
     if theme_confidence < 7 and not fundamentals_intact:
         return OpportunitySignal(
@@ -371,15 +380,7 @@ def detect_opportunity(
             **common,
         )
 
-    # ON SALE: significant dip with thesis + fundamentals intact
-    if drawdown is not None and drawdown < -10 and theme_confidence >= 7 and fundamentals_intact:
-        return OpportunitySignal(
-            signal_type=OpportunityType.ON_SALE,
-            recommended_action=f"Discounted {drawdown:.0f}% from peak — thesis and fundamentals intact. Lump sum candidate.",
-            **common,
-        )
-
-    # No significant dip — check for STABILIZED or RECOVERING
+    # Stabilization and recovery are more specific diagnoses than a drawdown.
     if drawdown is not None and drawdown < -15 and theme_confidence >= 7 and fundamentals_intact:
         # Check stabilization: was down >15%, now trading in tight range for 30+ days
         stabilized = _check_stabilized(ticker)
@@ -399,7 +400,27 @@ def detect_opportunity(
                 **common,
             )
 
-    return None
+    # A weakened thesis is never a buy, even when price action looks attractive.
+    if thesis_status is ThesisStatus.WEAKENED:
+        return OpportunitySignal(
+            signal_type=OpportunityType.CAUTION,
+            recommended_action="Thesis weakened — defer new exposure pending re-validation.",
+            **common,
+        )
+
+    # ON SALE: significant dip with thesis + fundamentals intact
+    if drawdown is not None and drawdown < -10 and theme_confidence >= 7 and fundamentals_intact:
+        return OpportunitySignal(
+            signal_type=OpportunityType.ON_SALE,
+            recommended_action=f"Discounted {drawdown:.0f}% from peak — thesis and fundamentals intact. Lump sum candidate.",
+            **common,
+        )
+
+    return OpportunitySignal(
+        signal_type=OpportunityType.NO_SIGNAL,
+        recommended_action="No actionable entry signal from the current observation.",
+        **common,
+    )
 
 
 def _check_stabilized(ticker: str) -> bool:
