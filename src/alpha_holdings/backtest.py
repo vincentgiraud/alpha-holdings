@@ -19,6 +19,18 @@ ALLOC_DIR = Path("data/allocations")
 THEMES_DIR = Path("data/themes")
 SCORES_DIR = Path("data/scores")
 
+PricePanel = dict[str, pd.Series]
+
+PERFORMANCE_ASSUMPTIONS = {
+    "price_basis": "adjusted_close",
+    "dividend_treatment": "included in adjusted close",
+    "fee_treatment": "no additional fees; fund expenses are reflected in adjusted prices",
+    "fx_treatment": "no FX conversion; position currencies are reported as stored",
+    "transaction_cost_pct": 0.0,
+    "cash_return_pct": 0.0,
+    "risk_free_rate_pct": 0.0,
+}
+
 
 # ---------------------------------------------------------------------------
 # Snapshot management
@@ -81,24 +93,115 @@ def fetch_price_history(
     tickers: list[str],
     start: datetime,
     end: datetime,
-) -> dict[str, pd.Series]:
-    """Fetch daily close prices for a list of tickers.
+) -> PricePanel:
+    """Fetch one bounded daily adjusted-close panel for a list of tickers.
 
-    Returns dict mapping ticker → Series of daily close prices.
+    ``Adj Close`` is required so splits and distributions are represented in
+    the same price series used by every backtest calculation. A provider that
+    exposes only raw ``Close`` data is treated as unavailable.
     """
-    prices: dict[str, pd.Series] = {}
+    prices: PricePanel = {}
     start_str = start.strftime("%Y-%m-%d")
     end_str = (end + timedelta(days=1)).strftime("%Y-%m-%d")
 
     for ticker in tickers:
         try:
-            hist = yf.Ticker(ticker).history(start=start_str, end=end_str)
-            if hist is not None and not hist.empty and "Close" in hist.columns:
-                prices[ticker] = hist["Close"]
+            hist = yf.Ticker(ticker).history(
+                start=start_str,
+                end=end_str,
+                auto_adjust=False,
+            )
+            if hist is None or hist.empty:
+                continue
+            if "Adj Close" not in hist.columns:
+                log.warning("Adjusted price unavailable for %s", ticker)
+                continue
+            column = "Adj Close"
+            series = pd.to_numeric(hist[column], errors="coerce").dropna()
+            prices[ticker] = _bound_price_series(series, start, end)
+            if prices[ticker].empty:
+                prices.pop(ticker)
         except Exception as exc:
             log.warning("Price fetch failed for %s: %s", ticker, exc)
 
     return prices
+
+
+def _bound_price_series(
+    series: pd.Series,
+    start: datetime,
+    end: datetime,
+) -> pd.Series:
+    """Keep only observations inside the requested inclusive date range."""
+    if not isinstance(series.index, pd.DatetimeIndex):
+        # A few legacy test/provider seams return an unindexed two-point
+        # series. It is already bounded by the provider call in that case.
+        return series
+
+    index = series.index
+    if index.tz is not None:
+        index = index.tz_convert(None)
+    else:
+        index = index.tz_localize(None)
+    bounded = series.copy()
+    bounded.index = index
+    return bounded[
+        (bounded.index.normalize() >= pd.Timestamp(start.date()))
+        & (bounded.index.normalize() <= pd.Timestamp(end.date()))
+    ]
+
+
+def _first_price_on_or_after(
+    series: pd.Series | None,
+    target: datetime,
+) -> float | None:
+    if series is None or series.empty:
+        return None
+    if not isinstance(series.index, pd.DatetimeIndex):
+        return float(series.iloc[0])
+    candidates = series[series.index.normalize() >= pd.Timestamp(target.date())]
+    if candidates.empty:
+        return None
+    return float(candidates.iloc[0])
+
+
+def _last_price_on_or_before(
+    series: pd.Series | None,
+    target: datetime,
+) -> float | None:
+    if series is None or series.empty:
+        return None
+    if not isinstance(series.index, pd.DatetimeIndex):
+        return float(series.iloc[-1])
+    candidates = series[series.index.normalize() <= pd.Timestamp(target.date())]
+    if candidates.empty:
+        return None
+    return float(candidates.iloc[-1])
+
+
+def _panel_return(
+    ticker: str,
+    prices: PricePanel,
+    start: datetime,
+    end: datetime,
+    entry_price: float | None = None,
+) -> tuple[float | None, float | None, float | None]:
+    """Return start reference, bounded end price, and percentage return."""
+    series = prices.get(ticker)
+    end_price = _last_price_on_or_before(series, end)
+    start_price = (
+        float(entry_price)
+        if entry_price is not None and entry_price > 0
+        else _first_price_on_or_after(series, start)
+    )
+    if (
+        start_price is None
+        or end_price is None
+        or start_price <= 0
+        or end_price <= 0
+    ):
+        return start_price, end_price, None
+    return start_price, end_price, round((end_price - start_price) / start_price * 100, 2)
 
 
 def _get_current_price(ticker: str) -> Optional[float]:
@@ -108,24 +211,6 @@ def _get_current_price(ticker: str) -> Optional[float]:
         return info.get("regularMarketPrice") or info.get("currentPrice")
     except Exception:
         return None
-
-
-def _get_period_return(ticker: str, start: datetime, end: datetime) -> Optional[float]:
-    """Get return % for a ticker between two dates."""
-    try:
-        hist = yf.Ticker(ticker).history(
-            start=start.strftime("%Y-%m-%d"),
-            end=(end + timedelta(days=1)).strftime("%Y-%m-%d"),
-        )
-        if hist is None or hist.empty or len(hist) < 2:
-            return None
-        start_price = hist["Close"].iloc[0]
-        end_price = hist["Close"].iloc[-1]
-        if start_price and start_price > 0:
-            return round((end_price - start_price) / start_price * 100, 2)
-    except Exception:
-        return None
-    return None
 
 
 @dataclass(frozen=True)
@@ -149,19 +234,22 @@ def _allocation_positions(alloc: dict) -> tuple[list[_AllocationPosition], bool]
         }
         positions = []
         for position in raw_positions:
-            if position.get("instrument_type") == "cash":
-                continue
             ticker = position.get("ticker", "").strip().upper()
             if not ticker:
                 continue
             sleeve = position.get("sleeve", "?")
+            is_cash = position.get("instrument_type") == "cash" or sleeve == "cash"
             positions.append(
                 _AllocationPosition(
                     ticker=ticker,
                     weight_pct=float(position.get("weight_pct", 0)),
                     entry_price=position.get("entry_price"),
                     sleeve=sleeve,
-                    theme=themes_by_ticker.get(ticker, str(sleeve).capitalize()),
+                    theme=(
+                        "Cash"
+                        if is_cash
+                        else themes_by_ticker.get(ticker, str(sleeve).capitalize())
+                    ),
                 )
             )
         return positions, True
@@ -191,6 +279,69 @@ def _allocation_positions(alloc: dict) -> tuple[list[_AllocationPosition], bool]
     return positions, False
 
 
+def _analysis_tickers(
+    alloc: dict,
+    scores: dict[str, list[dict]],
+    themes: list[dict],
+    benchmark: str | None = None,
+) -> list[str]:
+    """Collect the instruments needed by every backtest analysis."""
+    positions, _authoritative = _allocation_positions(alloc)
+    tickers = {
+        position.ticker for position in positions if position.sleeve != "cash"
+    }
+    tickers.update(
+        score.get("ticker", "").strip().upper()
+        for score_list in scores.values()
+        for score in score_list
+        if score.get("ticker", "").strip()
+    )
+    for theme in themes:
+        for sub_theme in theme.get("sub_themes", []):
+            for company in sub_theme.get("companies", []):
+                ticker = company.get("ticker", "").strip().upper()
+                suffix = company.get("exchange_suffix")
+                if ticker:
+                    tickers.add(f"{ticker}.{suffix}" if suffix else ticker)
+    if benchmark:
+        tickers.add(benchmark.upper())
+    return sorted(tickers)
+
+
+def _position_return(
+    position: _AllocationPosition,
+    *,
+    prices: PricePanel | None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+) -> tuple[float | None, float | None]:
+    """Return the end price and percentage return for one position."""
+    if position.sleeve == "cash":
+        return position.entry_price or 1.0, PERFORMANCE_ASSUMPTIONS["cash_return_pct"]
+    if prices is None:
+        current_price = _get_current_price(position.ticker)
+        if (
+            position.entry_price
+            and position.entry_price > 0
+            and current_price
+            and current_price > 0
+        ):
+            return current_price, round(
+                (current_price - position.entry_price) / position.entry_price * 100,
+                2,
+            )
+        return current_price, None
+    assert start is not None and end is not None
+    _start_price, end_price, return_pct = _panel_return(
+        position.ticker,
+        prices,
+        start,
+        end,
+        position.entry_price,
+    )
+    return end_price, return_pct
+
+
 # ---------------------------------------------------------------------------
 # Core return computation
 # ---------------------------------------------------------------------------
@@ -201,28 +352,43 @@ def compute_returns(
     from_date: str,
     to_date: str | None = None,
     benchmark: str = "SPY",
+    *,
+    prices: PricePanel | None = None,
 ) -> dict:
     """Compute portfolio and benchmark returns between two dates.
 
-    Returns dict with per-ticker returns, portfolio return, benchmark return, alpha.
+    All prices come from one bounded adjusted-price panel. ``prices`` is
+    supplied by ``full_backtest`` so every analysis shares the same data; the
+    public function fetches its own panel when called directly.
     """
     start = datetime.strptime(from_date, "%Y%m%d")
     end = datetime.strptime(to_date, "%Y%m%d") if to_date else datetime.utcnow()
 
     positions, authoritative = _allocation_positions(alloc)
+    if prices is None:
+        prices = fetch_price_history(
+            [
+                position.ticker
+                for position in positions
+                if position.sleeve != "cash"
+            ]
+            + [benchmark],
+            start,
+            end,
+        )
+
     ticker_returns: list[dict] = []
     for position in positions:
-        current_price = _get_current_price(position.ticker)
-        return_pct = None
-        if (
-            position.entry_price
-            and position.entry_price > 0
-            and current_price
-            and current_price > 0
-        ):
-            return_pct = round(
-                (current_price - position.entry_price) / position.entry_price * 100,
-                2,
+        if position.sleeve == "cash":
+            current_price = position.entry_price or 1.0
+            return_pct = PERFORMANCE_ASSUMPTIONS["cash_return_pct"]
+        else:
+            _start_price, current_price, return_pct = _panel_return(
+                position.ticker,
+                prices,
+                start,
+                end,
+                position.entry_price,
             )
         ticker_returns.append(
             {
@@ -233,102 +399,145 @@ def compute_returns(
                 "return_pct": return_pct,
                 "weight_pct": round(position.weight_pct, 2),
                 "sleeve": position.sleeve,
+                "price_as_of": to_date or end.strftime("%Y%m%d"),
+                "price_basis": PERFORMANCE_ASSUMPTIONS["price_basis"],
             }
         )
 
-    valid_returns = [
-        row for row in ticker_returns if row["return_pct"] is not None
-    ]
     missing_tickers = sorted(
-        row["ticker"] for row in ticker_returns if row["return_pct"] is None
-    )
-    thematic_returns = [
-        row
-        for row in valid_returns
-        if row.get("sleeve") == "thematic"
-    ]
-    thematic_missing = any(
-        row["return_pct"] is None and row.get("sleeve") == "thematic"
-        for row in ticker_returns
-    )
-    thematic_weight = sum(row["weight_pct"] for row in thematic_returns)
-    portfolio_return = (
-        round(
-            sum(row["return_pct"] * row["weight_pct"] for row in thematic_returns)
-            / thematic_weight,
-            2,
-        )
-        if thematic_weight > 0 and not thematic_missing
-        else None if thematic_missing else 0.0
+        {
+            row["ticker"]
+            for row in ticker_returns
+            if row["return_pct"] is None and row["sleeve"] != "cash"
+        }
     )
 
+    def sleeve_return(sleeve: str) -> float | None:
+        sleeve_rows = [row for row in ticker_returns if row["sleeve"] == sleeve]
+        if not sleeve_rows:
+            return 0.0
+        if any(row["return_pct"] is None for row in sleeve_rows):
+            return None
+        weight = sum(row["weight_pct"] for row in sleeve_rows)
+        if weight <= 0:
+            return 0.0
+        return round(
+            sum(row["return_pct"] * row["weight_pct"] for row in sleeve_rows)
+            / weight,
+            2,
+        )
+
+    thematic_return = sleeve_return("thematic")
+    core_return: float | None
+    defensive_return: float | None
+    cash_return = sleeve_return("cash")
+    unpriced_sleeves: list[str] = []
+    legacy_core_pct = 0.0
+    legacy_defensive_pct = 0.0
+    legacy_cash_pct = 0.0
+
     if authoritative:
-        core_returns = [
-            row for row in valid_returns if row.get("sleeve") == "core"
-        ]
-        core_missing = any(
-            row["return_pct"] is None and row.get("sleeve") == "core"
-            for row in ticker_returns
-        )
-        core_weight = sum(row["weight_pct"] for row in core_returns)
-        core_return = (
-            round(
-                sum(row["return_pct"] * row["weight_pct"] for row in core_returns)
-                / core_weight,
-                2,
-            )
-            if core_weight > 0 and not core_missing
-            else None
-        )
-        funded_weight = sum(position.weight_pct for position in positions)
+        core_return = sleeve_return("core")
+        defensive_return = sleeve_return("defensive")
         blended_return = (
             round(
-                sum(row["return_pct"] * row["weight_pct"] for row in valid_returns)
-                / funded_weight,
+                sum(row["return_pct"] * row["weight_pct"] for row in ticker_returns)
+                / 100,
                 2,
             )
-            if funded_weight > 0 and not missing_tickers
+            if positions and not missing_tickers
             else None
         )
     else:
-        core_pct = alloc.get("core_pct", 60)
-        core_return = _get_period_return(benchmark, start, end)
-        thematic_share = sum(position.weight_pct for position in positions) / 100.0
-        core_share = core_pct / 100.0
+        core_pct = float(alloc.get("core_pct", 60))
+        _benchmark_start, _benchmark_end, core_return = _panel_return(
+            benchmark,
+            prices,
+            start,
+            end,
+        )
+        defensive_pct = float(alloc.get("defensive_pct", 0))
+        cash_pct = float(alloc.get("cash_pct", 0))
+        legacy_core_pct = core_pct
+        legacy_defensive_pct = defensive_pct
+        legacy_cash_pct = cash_pct
+        unpriced_sleeves = ["defensive"] if defensive_pct else []
+        thematic_share = sum(position.weight_pct for position in positions) / 100
         blended_return = (
             round(
-                portfolio_return * thematic_share + core_return * core_share,
+                (thematic_return or 0) * thematic_share
+                + (core_return or 0) * core_pct / 100
+                + cash_pct * PERFORMANCE_ASSUMPTIONS["cash_return_pct"] / 100,
                 2,
             )
-            if portfolio_return is not None and core_return is not None
+            if thematic_return is not None
+            and core_return is not None
+            and not unpriced_sleeves
             else None
         )
+        defensive_return = None if defensive_pct else 0.0
 
-    benchmark_return = _get_period_return(benchmark, start, end)
+    _benchmark_start, _benchmark_end, benchmark_return = _panel_return(
+        benchmark,
+        prices,
+        start,
+        end,
+    )
     alpha = (
         round(blended_return - benchmark_return, 2)
         if blended_return is not None and benchmark_return is not None
         else None
     )
 
-    max_drawdown = 0.0
-    for tr in ticker_returns:
-        if tr["return_pct"] is not None and tr["return_pct"] < max_drawdown:
-            max_drawdown = tr["return_pct"]
+    total_weight = sum(position.weight_pct for position in positions)
+    covered_weight = sum(
+        row["weight_pct"]
+        for row in ticker_returns
+        if row["return_pct"] is not None
+    )
+    total_instruments = len(ticker_returns)
+    covered_instruments = sum(
+        1 for row in ticker_returns if row["return_pct"] is not None
+    )
+    if not authoritative:
+        total_weight += legacy_core_pct + legacy_defensive_pct + legacy_cash_pct
+        total_instruments += sum(
+            1 for weight in (
+                legacy_core_pct,
+                legacy_defensive_pct,
+                legacy_cash_pct,
+            ) if weight > 0
+        )
+        if benchmark_return is not None:
+            covered_weight += legacy_core_pct
+            covered_instruments += 1 if legacy_core_pct > 0 else 0
+        covered_weight += legacy_cash_pct
+        covered_instruments += 1 if legacy_cash_pct > 0 else 0
 
     return {
         "from_date": from_date,
-        "to_date": to_date or datetime.utcnow().strftime("%Y%m%d"),
+        "to_date": to_date or end.strftime("%Y%m%d"),
         "ticker_returns": ticker_returns,
-        "thematic_return": portfolio_return,
+        "thematic_return": thematic_return,
         "core_return": core_return,
+        "defensive_return": defensive_return,
+        "cash_return": cash_return,
         "blended_return": blended_return,
         "benchmark_ticker": benchmark,
         "benchmark_return": benchmark_return,
         "alpha": alpha,
-        "max_drawdown": round(max_drawdown, 2),
-        "incomplete": bool(missing_tickers),
+        "max_drawdown": None,
+        "incomplete": bool(missing_tickers or unpriced_sleeves),
         "missing_tickers": missing_tickers,
+        "coverage": {
+            "instruments_total": total_instruments,
+            "instruments_with_data": covered_instruments,
+            "weight_total_pct": round(total_weight, 2),
+            "weight_with_data_pct": round(covered_weight, 2),
+            "weight_missing_pct": round(total_weight - covered_weight, 2),
+            "unpriced_sleeves": unpriced_sleeves,
+        },
+        "assumptions": dict(PERFORMANCE_ASSUMPTIONS),
     }
 
 
@@ -341,15 +550,27 @@ def theme_attribution(
     alloc: dict,
     scores: dict[str, list[dict]],
     themes: list[dict],
+    *,
+    prices: PricePanel | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
 ) -> list[dict]:
     """P&L attribution by theme: return, weight, contribution, confidence."""
+    start = datetime.strptime(from_date, "%Y%m%d") if from_date else None
+    end = datetime.strptime(to_date, "%Y%m%d") if to_date else None
+    positions, _authoritative = _allocation_positions(alloc)
+    if prices is None and start is not None and end is not None:
+        prices = fetch_price_history(
+            [position.ticker for position in positions if position.sleeve != "cash"],
+            start,
+            end,
+        )
     # Build confidence lookup from themes
     confidence_map: dict[str, int] = {}
     for t in themes:
         confidence_map[t.get("name", "")] = t.get("confidence_score", 0)
 
     results: list[dict] = []
-    positions, _authoritative = _allocation_positions(alloc)
     by_theme: dict[str, list[_AllocationPosition]] = {}
     for position in positions:
         if position.sleeve == "thematic":
@@ -360,18 +581,16 @@ def theme_attribution(
         weighted_returns: list[tuple[float, float]] = []
         missing = 0
         for position in theme_positions:
-            current_price = _get_current_price(position.ticker)
-            if (
-                position.entry_price
-                and position.entry_price > 0
-                and current_price
-                and current_price > 0
-            ):
+            _current_price, return_pct = _position_return(
+                position,
+                prices=prices,
+                start=start,
+                end=end,
+            )
+            if return_pct is not None:
                 weighted_returns.append(
                     (
-                        (current_price - position.entry_price)
-                        / position.entry_price
-                        * 100,
+                        return_pct,
                         position.weight_pct,
                     )
                 )
@@ -418,11 +637,18 @@ def tier_analysis(
     alloc: dict,
     scores: dict[str, list[dict]],
     themes: list[dict],
+    *,
+    prices: PricePanel | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
 ) -> list[dict]:
     """Compare returns by supply chain tier (Tier 1 / 2 / 3).
 
     Uses all scored companies, not just allocated ones, for broader signal.
     """
+    start = datetime.strptime(from_date, "%Y%m%d") if from_date else None
+    end = datetime.strptime(to_date, "%Y%m%d") if to_date else None
+
     # Build company→tier map from themes
     ticker_tier: dict[str, str] = {}
     for t in themes:
@@ -442,6 +668,12 @@ def tier_analysis(
         for position in positions
         if position.entry_price is not None
     }
+    if prices is None and start is not None and end is not None:
+        prices = fetch_price_history(
+            _analysis_tickers(alloc, scores, themes),
+            start,
+            end,
+        )
 
     # Build per-tier return lists
     tier_data: dict[str, list[dict]] = {
@@ -465,14 +697,29 @@ def tier_analysis(
                 continue
 
             ep = entry_price_map.get(upper)
-            if not ep:
-                # Try to get historical price from allocation date (approximate)
-                continue
 
-            cp = _get_current_price(ticker)
-            ret = None
-            if ep and ep > 0 and cp and cp > 0:
-                ret = round((cp - ep) / ep * 100, 2)
+            if prices is None:
+                if not ep:
+                    # Legacy direct calls have no historical panel from which
+                    # to recover an unallocated candidate's entry price.
+                    continue
+                cp = _get_current_price(ticker)
+                ret = (
+                    round((cp - ep) / ep * 100, 2)
+                    if ep and ep > 0 and cp and cp > 0
+                    else None
+                )
+            else:
+                assert start is not None and end is not None
+                _start_price, cp, ret = _panel_return(
+                    upper,
+                    prices,
+                    start,
+                    end,
+                    ep,
+                )
+                if ret is None:
+                    continue
 
             tier_data[tier].append({
                 "ticker": ticker,
@@ -489,18 +736,12 @@ def tier_analysis(
         tier = ticker_tier.get(ticker, "")
         if tier not in tier_data:
             continue
-        current_price = _get_current_price(ticker)
-        return_pct = None
-        if (
-            position.entry_price
-            and position.entry_price > 0
-            and current_price
-            and current_price > 0
-        ):
-            return_pct = round(
-                (current_price - position.entry_price) / position.entry_price * 100,
-                2,
-            )
+        current_price, return_pct = _position_return(
+            position,
+            prices=prices,
+            start=start,
+            end=end,
+        )
         tier_data[tier].append(
             {
                 "ticker": ticker,
@@ -541,6 +782,10 @@ def tier_analysis(
 def score_validation(
     alloc: dict,
     scores: dict[str, list[dict]],
+    *,
+    prices: PricePanel | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
 ) -> list[dict]:
     """Test whether composite & component scores predict forward returns.
 
@@ -549,13 +794,24 @@ def score_validation(
     - Top-quartile vs bottom-quartile average return
     - Spread (top − bottom)
     """
-    # Collect all scored tickers with entry prices
+    start = datetime.strptime(from_date, "%Y%m%d") if from_date else None
+    end = datetime.strptime(to_date, "%Y%m%d") if to_date else None
+
+    # Collect scored tickers with persisted entry prices. The later cohort
+    # validation ticket can broaden this universe without changing the
+    # historical pricing seam here.
     positions, _authoritative = _allocation_positions(alloc)
     entry_price_map = {
         position.ticker: position.entry_price
         for position in positions
         if position.entry_price is not None
     }
+    if prices is None and start is not None and end is not None:
+        prices = fetch_price_history(
+            _analysis_tickers(alloc, scores, []),
+            start,
+            end,
+        )
 
     rows: list[dict] = []
     seen: set[str] = set()
@@ -571,12 +827,22 @@ def score_validation(
             ep = entry_price_map.get(upper)
             if not ep or ep <= 0:
                 continue
-
-            cp = _get_current_price(ticker)
-            if not cp or cp <= 0:
-                continue
-
-            ret = round((cp - ep) / ep * 100, 2)
+            if prices is None:
+                cp = _get_current_price(ticker)
+                if not cp or cp <= 0:
+                    continue
+                ret = round((cp - ep) / ep * 100, 2)
+            else:
+                assert start is not None and end is not None
+                _start_price, cp, ret = _panel_return(
+                    upper,
+                    prices,
+                    start,
+                    end,
+                    ep,
+                )
+                if ret is None:
+                    continue
             rows.append({
                 "ticker": ticker,
                 "return_pct": ret,
@@ -704,62 +970,125 @@ def compute_risk_metrics(
     from_date: str,
     to_date: str | None = None,
     benchmark: str = "SPY",
+    *,
+    prices: PricePanel | None = None,
 ) -> dict:
-    """Compute time-series risk metrics: Sharpe, max drawdown, volatility."""
+    """Compute full-portfolio time-series risk metrics.
+
+    Position weights remain percentage points of the whole portfolio. Cash is
+    represented as a zero-return sleeve, so missing market data cannot be
+    hidden by renormalizing the remaining instruments.
+    """
     start = datetime.strptime(from_date, "%Y%m%d")
     end = datetime.strptime(to_date, "%Y%m%d") if to_date else datetime.utcnow()
     days_elapsed = (end - start).days
 
-    positions, _authoritative = _allocation_positions(alloc)
+    positions, authoritative = _allocation_positions(alloc)
+    investable_positions = [
+        position for position in positions if position.sleeve != "cash"
+    ]
 
-    all_tickers = [position.ticker for position in positions] + [benchmark]
-    prices = fetch_price_history(list(set(all_tickers)), start, end)
+    if prices is None:
+        all_tickers = list(dict.fromkeys(
+            [position.ticker for position in investable_positions] + [benchmark]
+        ))
+        prices = fetch_price_history(all_tickers, start, end)
     missing_tickers = sorted(
-        position.ticker
-        for position in positions
-        if position.ticker not in prices or len(prices[position.ticker]) < 2
+        {
+            position.ticker
+            for position in investable_positions
+            if position.ticker not in prices or len(prices[position.ticker]) < 2
+        }
     )
 
-    # Build daily portfolio return series
-    daily_returns: list[float] = []
-    benchmark_daily: list[float] = []
-
     bm_prices = prices.get(benchmark)
-    if bm_prices is not None and len(bm_prices) >= 2:
-        bm_rets = bm_prices.pct_change().dropna()
-        benchmark_daily = bm_rets.tolist()
+    benchmark_daily_series = (
+        bm_prices.pct_change().dropna()
+        if bm_prices is not None and len(bm_prices) >= 2
+        else pd.Series(dtype=float)
+    )
+    benchmark_daily = benchmark_daily_series.tolist()
 
-    # Weighted portfolio daily returns
-    if positions and not missing_tickers:
-        total_weight = sum(position.weight_pct for position in positions)
-        if total_weight > 0:
-            # Get common dates across all position tickers
-            pos_series: list[tuple[float, pd.Series]] = []
-            for position in positions:
-                pos_series.append(
-                    (
-                        position.weight_pct / total_weight,
-                        prices[position.ticker].pct_change().dropna(),
-                    )
-                )
+    # Build one aligned daily return panel for every non-cash sleeve. Cash is
+    # added as zero return on the same index and therefore retains its weight.
+    component_returns: dict[str, tuple[float, pd.Series]] = {}
+    for index, position in enumerate(investable_positions):
+        if position.ticker in missing_tickers:
+            continue
+        component_returns[f"{position.ticker}:{index}"] = (
+            position.weight_pct / 100,
+            prices[position.ticker].pct_change().dropna(),
+        )
 
-            if pos_series:
-                # Align on common dates
-                combined = pd.DataFrame(
-                    {f"w{i}": s for i, (w, s) in enumerate(pos_series)}
-                ).dropna()
-                if not combined.empty:
-                    weights = [w for w, s in pos_series]
-                    for _, row in combined.iterrows():
-                        daily_ret = sum(w * row.iloc[i] for i, (w, _) in enumerate(pos_series))
-                        daily_returns.append(daily_ret)
+    unpriced_legacy_sleeves: list[str] = []
+    if not authoritative:
+        if alloc.get("core_pct", 0) and not benchmark_daily_series.empty:
+            component_returns["legacy-core"] = (
+                float(alloc.get("core_pct", 0)) / 100,
+                benchmark_daily_series,
+            )
+        elif alloc.get("core_pct", 0):
+            unpriced_legacy_sleeves.append("core")
+        if alloc.get("defensive_pct", 0):
+            # Legacy snapshots did not persist a defensive instrument. Keep
+            # that exposure visible as incomplete instead of treating it as 0.
+            unpriced_legacy_sleeves.append("defensive")
+
+    if missing_tickers or unpriced_legacy_sleeves:
+        daily_returns: list[float] = []
+    elif component_returns:
+        combined = pd.DataFrame(
+            {name: series for name, (_weight, series) in component_returns.items()}
+        ).dropna()
+        daily_returns = [
+            sum(weight * row[name] for name, (weight, _series) in component_returns.items())
+            for _, row in combined.iterrows()
+        ]
+    elif benchmark_daily_series.empty:
+        daily_returns = []
+    else:
+        # An all-cash versioned allocation has no market series of its own;
+        # benchmark dates provide the calendar for its explicit zero return.
+        daily_returns = [0.0 for _value in benchmark_daily_series]
+
+    total_weight = (
+        sum(position.weight_pct for position in positions)
+        if authoritative
+        else sum(position.weight_pct for position in positions)
+        + float(alloc.get("core_pct", 0))
+        + float(alloc.get("defensive_pct", 0))
+        + float(alloc.get("cash_pct", 0))
+    )
+    covered_weight = sum(
+        position.weight_pct
+        for position in positions
+        if position.sleeve == "cash"
+        or (
+            position.ticker not in missing_tickers
+            and position.ticker in prices
+            and len(prices[position.ticker]) >= 2
+        )
+    )
+    if not authoritative and benchmark_daily_series.size:
+        covered_weight += float(alloc.get("core_pct", 0))
 
     # Compute metrics
     result: dict = {
         "days_elapsed": days_elapsed,
         "trading_days": len(daily_returns),
-        "incomplete": bool(missing_tickers),
+        "incomplete": bool(missing_tickers or unpriced_legacy_sleeves),
         "missing_tickers": missing_tickers,
+        "coverage": {
+            "instruments_total": len(positions),
+            "instruments_with_data": len(positions) - len(missing_tickers),
+            "weight_total_pct": round(total_weight, 2),
+            "weight_with_data_pct": round(covered_weight, 2),
+            "weight_missing_pct": round(total_weight - covered_weight, 2),
+            "unpriced_sleeves": unpriced_legacy_sleeves,
+        },
+        "cash_return_pct": PERFORMANCE_ASSUMPTIONS["cash_return_pct"],
+        "risk_free_rate_pct": PERFORMANCE_ASSUMPTIONS["risk_free_rate_pct"],
+        "assumptions": dict(PERFORMANCE_ASSUMPTIONS),
     }
 
     if daily_returns:
@@ -773,8 +1102,8 @@ def compute_risk_metrics(
             max_dd = min(max_dd, dd)
 
         total_return = (cum - 1) * 100
-        ann_factor = 252 / max(len(daily_returns), 1)
-        ann_return = ((cum ** ann_factor) - 1) * 100 if len(daily_returns) > 5 else None
+        ann_factor = 365.25 / days_elapsed if days_elapsed > 0 else 0
+        ann_return = ((cum ** ann_factor) - 1) * 100 if len(daily_returns) > 5 and ann_factor else None
         vol = statistics.stdev(daily_returns) * (252 ** 0.5) * 100 if len(daily_returns) > 5 else None
         sharpe = (ann_return / vol) if ann_return is not None and vol and vol > 0 else None
 
@@ -832,33 +1161,74 @@ def full_backtest(
     if not snapshot:
         return None
 
+    resolved_to_date = to_date or datetime.utcnow().strftime("%Y%m%d")
     alloc = snapshot["allocation"]
     scores = snapshot["scores"]
     themes = snapshot["themes"]
 
+    start = datetime.strptime(from_date, "%Y%m%d")
+    end = datetime.strptime(resolved_to_date, "%Y%m%d")
+    prices = fetch_price_history(
+        _analysis_tickers(alloc, scores, themes, benchmark),
+        start,
+        end,
+    )
+
     log.info("Running full backtest from %s...", from_date)
 
     # 1. Basic returns
-    returns = compute_returns(alloc, from_date, to_date, benchmark)
+    returns = compute_returns(
+        alloc,
+        from_date,
+        resolved_to_date,
+        benchmark,
+        prices=prices,
+    )
 
     # 2. Theme attribution
-    theme_attr = theme_attribution(alloc, scores, themes)
+    theme_attr = theme_attribution(
+        alloc,
+        scores,
+        themes,
+        prices=prices,
+        from_date=from_date,
+        to_date=resolved_to_date,
+    )
 
     # 3. Tier analysis
-    tiers = tier_analysis(alloc, scores, themes)
+    tiers = tier_analysis(
+        alloc,
+        scores,
+        themes,
+        prices=prices,
+        from_date=from_date,
+        to_date=resolved_to_date,
+    )
 
     # 4. Score validation
-    score_val = score_validation(alloc, scores)
+    score_val = score_validation(
+        alloc,
+        scores,
+        prices=prices,
+        from_date=from_date,
+        to_date=resolved_to_date,
+    )
 
     # 5. Confidence analysis
     conf = confidence_analysis(theme_attr)
 
     # 6. Risk metrics
-    risk = compute_risk_metrics(alloc, from_date, to_date, benchmark)
+    risk = compute_risk_metrics(
+        alloc,
+        from_date,
+        resolved_to_date,
+        benchmark,
+        prices=prices,
+    )
 
     return {
         "snapshot_date": from_date,
-        "to_date": to_date or datetime.utcnow().strftime("%Y%m%d"),
+        "to_date": resolved_to_date,
         "returns": returns,
         "theme_attribution": theme_attr,
         "tier_analysis": tiers,

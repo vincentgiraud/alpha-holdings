@@ -178,8 +178,8 @@ alpha-holdings backtest --validate               # Include score validation anal
 ```
 
 **Output includes:**
-- Per-ticker returns (entry price → current, weighted by allocation)
-- Portfolio summary: thematic return, core return, blended return, alpha, Sharpe ratio, max drawdown, win rate
+- Per-ticker returns (frozen entry price → requested historical end date, using adjusted prices)
+- Portfolio summary: thematic, core, defensive, and cash returns; blended return, alpha, Sharpe ratio, max drawdown, win rate, and data coverage by instrument count and portfolio weight
 - Theme attribution: which themes contributed most to P&L, ranked by contribution
 - Tier analysis: avg/median returns by Tier 1 / 2 / 3 — tests the "sell shovels" thesis
 - Score validation (`--validate`): Spearman rank correlation + top/bottom quartile spread for each scoring dimension (composite, fundamental, thesis alignment, pricing gap)
@@ -193,10 +193,14 @@ alpha-holdings backtest --validate               # Include score validation anal
 
 **Building a track record:** Run `discover` periodically (weekly/monthly) to accumulate snapshots. Each snapshot records entry prices at discovery time. The backtest compares those frozen entry prices against current market prices. More snapshots = more statistical power for validating the model.
 
-Backtests and `monitor --since` consume the concrete position list, including
-core, defensive, and thematic ETFs. If any funded instrument lacks current or
-historical data, the analysis names the missing ticker and leaves portfolio
-metrics unavailable instead of silently reweighting the remaining positions.
+Backtests consume one adjusted historical price panel bounded by `--from` and
+`--to` for every position, benchmark, attribution, tier, score-validation, and
+risk calculation. They include explicit zero-return cash, preserve each
+position's persisted whole-portfolio weight, and state dividend, fee,
+transaction-cost, FX, cash-return, and risk-free-rate assumptions. If any
+funded instrument lacks historical data, the analysis names the missing ticker
+and reports coverage by instrument count and portfolio weight instead of
+silently reweighting the remaining positions.
 
 **Limitations:** Backtesting only works from when themes were first saved. Cannot simulate past runs retroactively. Statistical significance requires 3+ months and multiple snapshots. Past performance does not predict future results.
 

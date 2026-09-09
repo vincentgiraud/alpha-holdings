@@ -788,7 +788,7 @@ def backtest(from_date: str | None, to_date: str | None, benchmark: str, validat
 
     console.rule(f"[bold]Track Record: {from_date} → {to_date or 'today'}[/bold]")
     console.print(f"Benchmark: {benchmark}")
-    console.print("[dim]Fetching current prices...[/dim]")
+    console.print("[dim]Fetching bounded historical adjusted prices...[/dim]")
     console.print()
 
     result = full_backtest(from_date, to_date, benchmark)
@@ -845,7 +845,9 @@ def backtest(from_date: str | None, to_date: str | None, benchmark: str, validat
     summary.add_column("Value", justify="right")
 
     _add_return_row(summary, "Thematic return (weighted)", returns["thematic_return"])
-    _add_return_row(summary, "Core return (benchmark proxy)", returns["core_return"])
+    _add_return_row(summary, "Core return", returns["core_return"])
+    _add_return_row(summary, "Defensive return", returns.get("defensive_return"))
+    _add_return_row(summary, "Cash return", returns.get("cash_return"))
     _add_return_row(summary, "Blended portfolio return", returns["blended_return"])
     _add_return_row(summary, f"Benchmark ({benchmark})", returns["benchmark_return"])
 
@@ -873,7 +875,28 @@ def backtest(from_date: str | None, to_date: str | None, benchmark: str, validat
     if rets_with_data:
         win_rate = sum(1 for r in rets_with_data if r > 0) / len(rets_with_data) * 100
         summary.add_row("Win rate (tickers > 0%)", f"{win_rate:.0f}% ({sum(1 for r in rets_with_data if r > 0)}/{len(rets_with_data)})")
+    coverage = returns.get("coverage", {})
+    if coverage:
+        summary.add_row(
+            "Portfolio data coverage",
+            f"{coverage.get('instruments_with_data', 0)} / "
+            f"{coverage.get('instruments_total', 0)} instruments; "
+            f"{coverage.get('weight_with_data_pct', 0):.1f}% / "
+            f"{coverage.get('weight_total_pct', 0):.1f}% by weight",
+        )
     console.print(summary)
+    assumptions = returns.get("assumptions", {})
+    if assumptions:
+        console.print(
+            "[dim]Assumptions: "
+            f"{assumptions.get('price_basis', 'n/a')}; "
+            f"dividends {assumptions.get('dividend_treatment', 'n/a')}; "
+            f"fees {assumptions.get('fee_treatment', 'n/a')}; "
+            f"FX {assumptions.get('fx_treatment', 'n/a')}; "
+            f"cash return {assumptions.get('cash_return_pct', 0):.1f}%; "
+            f"risk-free rate {assumptions.get('risk_free_rate_pct', 0):.1f}%; "
+            f"transaction costs {assumptions.get('transaction_cost_pct', 0):.1f}%.[/dim]"
+        )
 
     # --- Theme attribution ---
     console.print()
