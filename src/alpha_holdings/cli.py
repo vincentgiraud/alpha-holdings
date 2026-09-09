@@ -7,7 +7,7 @@ import logging
 import math
 import re
 import sys
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import click
@@ -367,7 +367,8 @@ def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str
 
 @cli.command()
 @click.option("--file", "-f", required=True, type=click.Path(exists=True), help="Path to your holdings JSON file.")
-def holdings(file: str) -> None:
+@click.option("--base-currency", type=SUPPORTED_CURRENCY, default="USD", help="Currency used to compare position values.")
+def holdings(file: str, base_currency: str) -> None:
     """Analyze overlap between your existing holdings and the latest saved allocation."""
     from alpha_holdings.holdings import load_holdings, get_existing_exposure, analyze_overlap
 
@@ -381,61 +382,65 @@ def holdings(file: str) -> None:
         console.print("[yellow]No saved allocations. Run 'discover' first.[/yellow]")
         return
 
-    import json as json_mod
-    alloc_data = json_mod.loads(files[0].read_text())
-    entries = alloc_data.get("entries", [])
-    core_pct = alloc_data.get("core_pct", 60)
-    capital = alloc_data.get("capital")
-
-    hp = load_holdings(file)
-    if not hp.holdings:
+    existing_portfolio = load_holdings(file)
+    if not existing_portfolio.holdings:
         console.print("[yellow]No holdings found in the file.[/yellow]")
         return
+    proposed_portfolio = load_holdings(files[0])
+    if not proposed_portfolio.holdings:
+        console.print("[yellow]Latest allocation has no investable positions.[/yellow]")
+        return
 
-    existing = get_existing_exposure(hp)
-    held_tickers = {h.ticker.upper() for h in hp.holdings}
+    analysis_time = datetime.now(UTC)
+    existing = get_existing_exposure(
+        existing_portfolio,
+        base_currency=base_currency,
+        as_of=analysis_time,
+    )
+    proposed = get_existing_exposure(
+        proposed_portfolio,
+        base_currency=base_currency,
+        as_of=analysis_time,
+    )
 
     console.rule("[bold]Holdings Overlap Analysis[/bold]")
     has_overlap = False
 
-    # Core overlap
-    core_vehicles = {"VT", "VOO", "SPY", "IWDA.AS", "VWCE.DE"}
-    core_overlap = held_tickers & core_vehicles
-    if core_overlap:
+    existing_direct = {holding.ticker for holding in existing_portfolio.holdings}
+    proposed_direct: dict[str, float] = {}
+    for holding in proposed_portfolio.holdings:
+        if holding.weight_pct is not None:
+            proposed_direct[holding.ticker] = (
+                proposed_direct.get(holding.ticker, 0) + holding.weight_pct
+            )
+    direct_overlap = existing_direct & set(proposed_direct)
+    for ticker in sorted(direct_overlap):
         has_overlap = True
-        core_amt = f" (${capital * core_pct / 100:,.0f})" if capital else ""
-        for t in core_overlap:
+        console.print(
+            f"  [yellow]⚠ {ticker}[/yellow] — you already hold this directly. "
+            f"Proposed portfolio adds {proposed_direct[ticker]:.1f}% — "
+            "review your total desired exposure before sizing."
+        )
+
+    for overlap in analyze_overlap(existing, proposed):
+        if overlap["ticker"] in direct_overlap:
+            continue
+        has_overlap = True
+        console.print(
+            f"  [yellow]⚠ {overlap['ticker']}[/yellow] — existing effective "
+            f"exposure is ~{overlap['existing_pct']:.1f}%; the proposal adds "
+            f"~{overlap['new_pct']:.1f}%, bringing it to "
+            f"~{overlap['combined_pct']:.1f}%."
+        )
+
+    for label, analysis in (("Existing", existing), ("Proposed", proposed)):
+        if analysis.coverage_pct < 99.99 or analysis.warnings:
             console.print(
-                f"  [cyan]ℹ {t}[/cyan] — you already hold this. "
-                f"Core allocation of {core_pct:.0f}%{core_amt} adds to your existing position."
+                f"  [yellow]{label} exposure coverage: "
+                f"{analysis.coverage_pct:.1f}%.[/yellow]"
             )
-
-    # Thematic overlap
-    for entry in entries:
-        tickers = [t.strip() for t in entry.get("vehicle", "").split(",")]
-        theme_name = entry.get("theme", "?")
-        pct = entry.get("pct_allocation", 0)
-
-        for t in tickers:
-            if t.upper() in held_tickers:
-                has_overlap = True
-                console.print(
-                    f"  [yellow]⚠ {t}[/yellow] — you already hold this directly. "
-                    f"[bold]{theme_name}[/bold] adds {pct:.1f}% — "
-                    f"review your total desired exposure before sizing."
-                )
-
-        overlaps = analyze_overlap(existing, tickers, pct)
-        for o in overlaps:
-            if o["ticker"].upper() in held_tickers:
-                continue
-            has_overlap = True
-            console.print(
-                f"  [yellow]⚠ {o['ticker']}[/yellow] — "
-                f"you already hold ~{o['existing_pct']:.1f}% via index funds. "
-                f"Adding [bold]{theme_name}[/bold] brings effective weight to "
-                f"~{o['combined_pct']:.1f}%"
-            )
+            for warning in analysis.warnings:
+                console.print(f"    [yellow]- {warning}[/yellow]")
 
     if not has_overlap:
         console.print("  [green]No significant overlap between your holdings and recommended themes.[/green]")

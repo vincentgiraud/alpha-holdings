@@ -237,7 +237,7 @@ def _fetch_yahoo_evidence(ticker: str) -> ETFMarketEvidence:
     holdings: dict[str, float] = {}
     top_holdings = instrument.funds_data.top_holdings
     if top_holdings is not None and not top_holdings.empty:
-        holdings = _parse_holdings(top_holdings)
+        holdings = parse_provider_holdings(top_holdings)
     history = instrument.history(period="5d", auto_adjust=False)
     adjusted_close = None
     price_as_of = None
@@ -263,7 +263,8 @@ def _fetch_yahoo_evidence(ticker: str) -> ETFMarketEvidence:
     )
 
 
-def _parse_holdings(table) -> dict[str, float]:
+def parse_provider_holdings(table) -> dict[str, float]:
+    """Read ETF weights from an explicitly recognized provider schema."""
     weight_formats = {
         "Holding Percent": "fraction",
         "% Of Net Assets": "percentage",

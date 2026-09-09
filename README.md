@@ -78,11 +78,17 @@ Analyze overlap between your existing positions and the latest saved allocation.
 alpha-holdings holdings --file holdings.example.json
 alpha-holdings holdings --file data/my_portfolio.json
 alpha-holdings holdings --file data/allocations/xxxxxxxx_allocation.json  # accepts allocation files directly
+alpha-holdings holdings --file data/my_portfolio.json --base-currency EUR
 ```
 
 Accepts two formats:
-- **Holdings JSON**: `[{"ticker": "VT", "shares": 100, "avg_cost": 95.50}, ...]`
-- **Allocation JSON**: the `data/allocations/*_allocation.json` files from `discover` — auto-detected, no conversion needed
+- **Holdings JSON**: `[{"ticker": "VT", "shares": 100, "avg_cost": 95.50}, ...]`; repeated lots are aggregated before weighting.
+- **Allocation JSON**: the `data/allocations/*_allocation.json` files from `discover`; concrete position weights, currency, and dated entry prices are preserved.
+
+Share-based portfolios are valued at dated adjusted prices and converted into
+`--base-currency` (default `USD`) with FX observations from the same date before
+normalization. Missing quotes or FX rates reduce the reported coverage; the
+command never silently substitutes an equal-weight portfolio.
 
 ### `alpha-holdings explain`
 
@@ -110,13 +116,12 @@ Create a JSON file with your existing positions:
 ]
 ```
 
-Index funds and ETFs are automatically decomposed into their constituent holdings for overlap analysis using a 3-tier fallback:
-
-1. **yfinance** — live ETF holdings data (most accurate, but not always available)
-2. **LLM + web search** — asks the AI model to look up current holdings (works for any ETF)
-3. **Built-in data** — hardcoded approximate weights for 15 common ETFs (VT, VOO, SPY, QQQ, SMH, SOXX, XLK, URA, HACK, XME, XLE, ITA, IWDA.AS, VWCE.DE)
-
-This means any ETF you hold — including thematic ones like SMH, URA, or ARKK — will be decomposed for overlap detection. See [holdings.example.json](holdings.example.json) for a sample.
+Both existing and proposed ETFs are decomposed through named provider weight
+fields. If live composition is unavailable, the command identifies any
+disclosed built-in approximation and reports reduced coverage. Unreported fund
+weight remains visible as `<ETF>:UNKNOWN/OTHER`; it is never discarded or
+presented as known constituent exposure. See
+[holdings.example.json](holdings.example.json) for a sample.
 
 ### `alpha-holdings monitor`
 
