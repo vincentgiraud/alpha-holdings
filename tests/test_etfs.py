@@ -240,6 +240,45 @@ def test_find_etf_normalizes_named_holdings_and_retains_unknown_weight(
     assert market_data.data.source == "yfinance"
 
 
+def test_yahoo_provider_normalizes_net_expense_ratio_percent(monkeypatch) -> None:
+    class FakeTicker:
+        info = {
+            "symbol": "VT",
+            "shortName": "Vanguard Total World Stock ETF",
+            "quoteType": "ETF",
+            "averageDailyVolume10Day": 100_000,
+            "totalAssets": 500_000_000,
+            "annualReportExpenseRatio": None,
+            "netExpenseRatio": 0.06,
+        }
+        funds_data = type(
+            "FundsData",
+            (),
+            {
+                "top_holdings": pd.DataFrame(
+                    {
+                        "Holding Percent": [1.0],
+                    },
+                    index=["ACME"],
+                )
+            },
+        )()
+
+        def history(self, **_kwargs):
+            return pd.DataFrame({"Adj Close": [50.0]}, index=[pd.Timestamp(NOW)])
+
+    monkeypatch.setattr(etfs_module.yf, "Ticker", lambda _ticker: FakeTicker())
+
+    evidence = etfs_module._fetch_yahoo_evidence("VT")
+    assert evidence.expense_ratio == pytest.approx(0.0006)
+
+    result = fetch_validated_etf("VT")
+
+    assert result.status is MarketDataStatus.AVAILABLE
+    assert result.data is not None
+    assert result.data.current_price == 50
+
+
 def test_find_etf_fails_closed_when_candidate_schema_is_not_a_list(
     monkeypatch,
 ) -> None:

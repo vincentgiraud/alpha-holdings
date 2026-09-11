@@ -234,6 +234,13 @@ def _fetch_yahoo_evidence(ticker: str) -> ETFMarketEvidence:
     """Fetch one ETF observation from Yahoo Finance."""
     instrument = yf.Ticker(ticker)
     info = instrument.info or {}
+    annual_expense_ratio = info.get("annualReportExpenseRatio")
+    net_expense_ratio = info.get("netExpenseRatio")
+    expense_ratio = (
+        annual_expense_ratio
+        if annual_expense_ratio is not None
+        else (float(net_expense_ratio) / 100 if net_expense_ratio is not None else None)
+    )
     holdings: dict[str, float] = {}
     top_holdings = instrument.funds_data.top_holdings
     if top_holdings is not None and not top_holdings.empty:
@@ -255,7 +262,7 @@ def _fetch_yahoo_evidence(ticker: str) -> ETFMarketEvidence:
         average_daily_volume=info.get("averageDailyVolume10Day")
         or info.get("averageVolume"),
         total_assets=info.get("totalAssets"),
-        expense_ratio=info.get("annualReportExpenseRatio"),
+        expense_ratio=expense_ratio,
         adjusted_close=adjusted_close,
         price_as_of=price_as_of,
         source="yfinance",
