@@ -5,6 +5,7 @@ import pytest
 from click.testing import CliRunner
 
 from alpha_holdings.cli import cli
+from alpha_holdings.llm import CodexCLIError
 
 
 @pytest.fixture
@@ -142,6 +143,22 @@ def test_discover_accepts_positive_capital_and_supported_currency(
     assert result.exit_code == 0
     assert received["capital"] == 0.01
     assert received["base_currency"] == "EUR"
+
+
+def test_codex_failure_is_rendered_as_a_concise_cli_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def usage_limited(**_: object) -> None:
+        raise CodexCLIError("You've hit your usage limit", retryable=False)
+
+    monkeypatch.setattr(cli.commands["discover"], "callback", usage_limited)
+
+    result = CliRunner().invoke(cli, ["discover"])
+
+    assert result.exit_code == 1
+    assert result.output == (
+        "Error: AI research unavailable: You've hit your usage limit\n"
+    )
 
 
 @pytest.mark.parametrize("score", ["0", "100"])

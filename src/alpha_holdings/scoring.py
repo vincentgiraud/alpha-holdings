@@ -380,6 +380,14 @@ def detect_opportunity(
             **common,
         )
 
+    # A weakened thesis is never a buy, even when price action looks attractive.
+    if thesis_status is ThesisStatus.WEAKENED:
+        return OpportunitySignal(
+            signal_type=OpportunityType.CAUTION,
+            recommended_action="Thesis weakened — defer new exposure pending re-validation.",
+            **common,
+        )
+
     # Stabilization and recovery are more specific diagnoses than a drawdown.
     if drawdown is not None and drawdown < -15 and theme_confidence >= 7 and fundamentals_intact:
         # Check stabilization: was down >15%, now trading in tight range for 30+ days
@@ -399,14 +407,6 @@ def detect_opportunity(
                 recommended_action=f"Down {drawdown:.0f}% from peak but trend reversing — momentum shifting positive.",
                 **common,
             )
-
-    # A weakened thesis is never a buy, even when price action looks attractive.
-    if thesis_status is ThesisStatus.WEAKENED:
-        return OpportunitySignal(
-            signal_type=OpportunityType.CAUTION,
-            recommended_action="Thesis weakened — defer new exposure pending re-validation.",
-            **common,
-        )
 
     # ON SALE: significant dip with thesis + fundamentals intact
     if drawdown is not None and drawdown < -10 and theme_confidence >= 7 and fundamentals_intact:
@@ -554,6 +554,17 @@ def _combined_llm_scores(
                     f"'{company.full_ticker}'"
                 )
             return payload, scoring_provider
+        except llm.CodexCLIError as exc:
+            if not exc.retryable:
+                raise
+            last_error = exc
+            log.warning(
+                "AI scoring provider failed for %s (attempt %d/%d): %s",
+                company.full_ticker,
+                attempt + 1,
+                AI_VALIDATION_ATTEMPTS,
+                exc,
+            )
         except Exception as exc:
             last_error = exc
             log.warning(

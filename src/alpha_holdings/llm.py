@@ -24,11 +24,17 @@ _debug_counter = 0
 
 _MAX_RETRIES = 5
 _RETRY_BASE_DELAY = 2  # seconds
+_NON_RETRYABLE_ERROR_MARKERS = (
+    "you've hit your usage limit",
+    "you have hit your usage limit",
+    "purchase more credits",
+)
 
 DEFAULT_CODEX_CLI_COMMAND = "codex"
 DEFAULT_CODEX_CLI_TIMEOUT = 600
 DEFAULT_CODEX_MODEL = "gpt-5.6-luna"
-DEFAULT_CODEX_REASONING_EFFORT = "xhigh"
+DEFAULT_CODEX_REASONING_EFFORT = "medium"
+DEFAULT_CODEX_MINI_REASONING_EFFORT = "low"
 
 
 @dataclass(frozen=True)
@@ -82,9 +88,20 @@ def get_model(mini: bool = False) -> str:
     return os.environ.get("CODEX_MODEL", DEFAULT_CODEX_MODEL)
 
 
-def get_reasoning_effort(reasoning: str | None = None) -> str:
-    """Return a per-call override or the configured default effort."""
-    return reasoning or os.environ.get(
+def get_reasoning_effort(
+    reasoning: str | None = None,
+    *,
+    mini: bool = False,
+) -> str:
+    """Return a per-call override or the configured request-class effort."""
+    if reasoning:
+        return reasoning
+    if mini:
+        return os.environ.get(
+            "CODEX_MINI_REASONING_EFFORT",
+            DEFAULT_CODEX_MINI_REASONING_EFFORT,
+        )
+    return os.environ.get(
         "CODEX_REASONING_EFFORT", DEFAULT_CODEX_REASONING_EFFORT
     )
 
@@ -152,7 +169,14 @@ def _run_codex(
     command = _build_command(
         model=model, reasoning=reasoning, web_search=web_search
     )
+    timeout = get_cli_timeout()
     log.debug("Running Codex CLI: %s", shlex.join(command[:-1]) + " -")
+    log.info(
+        "Starting Codex CLI request (web search: %s, reasoning: %s, timeout: %ss).",
+        "on" if web_search else "off",
+        reasoning,
+        timeout,
+    )
 
     try:
         completed = subprocess.run(
@@ -160,7 +184,7 @@ def _run_codex(
             input=prompt,
             capture_output=True,
             text=True,
-            timeout=get_cli_timeout(),
+            timeout=timeout,
             check=False,
         )
     except FileNotFoundError as exc:
@@ -171,20 +195,28 @@ def _run_codex(
             retryable=False,
         ) from exc
     except subprocess.TimeoutExpired as exc:
-        timeout = get_cli_timeout()
         raise CodexCLIError(
-            f"Codex CLI timed out after {timeout} seconds."
+            f"Codex CLI timed out after {timeout} seconds. "
+            "The request was not retried; lower the reasoning effort or increase "
+            "CODEX_CLI_TIMEOUT.",
+            retryable=False,
         ) from exc
     except OSError as exc:
         raise CodexCLIError(f"Unable to start Codex CLI: {exc}", retryable=False) from exc
 
     if completed.returncode != 0:
         details = completed.stderr.strip() or completed.stdout.strip()
+        normalized_details = details.lower()
         if len(details) > 1000:
             details = details[-1000:]
         suffix = f": {details}" if details else ""
+        retryable = not any(
+            marker in normalized_details
+            for marker in _NON_RETRYABLE_ERROR_MARKERS
+        )
         raise CodexCLIError(
-            f"Codex CLI exited with status {completed.returncode}{suffix}"
+            f"Codex CLI exited with status {completed.returncode}{suffix}",
+            retryable=retryable,
         )
 
     output = completed.stdout.strip()
@@ -252,7 +284,7 @@ def respond(
         structured=structured,
     )
     model = get_model(mini=mini)
-    effort = get_reasoning_effort(reasoning)
+    effort = get_reasoning_effort(reasoning, mini=mini)
     kwargs: dict[str, Any] = {
         "model": model,
         "reasoning": effort,

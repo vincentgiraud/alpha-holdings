@@ -17,6 +17,7 @@ from rich.tree import Tree
 from rich.panel import Panel
 from rich.text import Text
 
+from alpha_holdings.llm import CodexCLIError
 from alpha_holdings.models import (
     EntryMethod,
     ETFRecommendationType,
@@ -31,6 +32,16 @@ from alpha_holdings.models import (
 )
 
 console = Console()
+
+
+class CodexErrorHandlingGroup(click.Group):
+    """Render systemic Codex failures as concise CLI errors."""
+
+    def invoke(self, ctx: click.Context):
+        try:
+            return super().invoke(ctx)
+        except CodexCLIError as exc:
+            raise click.ClickException(f"AI research unavailable: {exc}") from exc
 
 
 class PositiveFiniteFloat(click.ParamType):
@@ -190,7 +201,7 @@ REGIME_BADGE = {
 }
 
 
-@click.group()
+@click.group(cls=CodexErrorHandlingGroup)
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug logging.")
 @click.option("--debug", is_flag=True, help="Dump raw API responses to data/debug/.")
 @click.pass_context
@@ -391,7 +402,7 @@ def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str
         created_at=fund_mod.DEFAULT_CLOCK(),
         model_configuration={
             "scoring_model": llm_mod.get_model(mini=True),
-            "scoring_reasoning_effort": llm_mod.get_reasoning_effort(),
+            "scoring_reasoning_effort": llm_mod.get_reasoning_effort(mini=True),
             "scoring_weights": score_mod.SCORING_WEIGHTS,
             "fundamental_metric_weights": score_mod.FUNDAMENTAL_METRIC_WEIGHTS,
             "required_market_fields": list(fund_mod.REQUIRED_MARKET_FIELDS),

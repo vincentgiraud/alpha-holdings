@@ -39,11 +39,14 @@ alpha-holdings discover --risk moderate --horizon 3-5yr
 | `CODEX_CLI_COMMAND` | No | Codex executable and optional fixed arguments (default: `codex`) |
 | `CODEX_CLI_TIMEOUT` | No | Timeout in seconds for one CLI call (default: `600`) |
 | `CODEX_MODEL` | No | Model passed to Codex CLI (default: `gpt-5.6-luna`) |
-| `CODEX_REASONING_EFFORT` | No | Reasoning effort passed as `model_reasoning_effort` (default: `xhigh`) |
+| `CODEX_REASONING_EFFORT` | No | Reasoning effort for full research calls (default: `medium`) |
+| `CODEX_MINI_REASONING_EFFORT` | No | Reasoning effort for repeated scoring and ETF calls (default: `low`) |
 
 `CODEX_CLI_TIMEOUT` applies to each individual Codex request. The 600-second
-default allows full web-grounded `discover` calls to finish at `xhigh`. Lower it
-for short calls when faster failure is more important than completion:
+default allows full web-grounded `discover` calls to finish at `medium`. A hard
+timeout is not retried because replaying the same long request can multiply a
+single failure into nearly an hour of waiting. Lower the timeout when faster
+failure is more important than completion:
 
 ```bash
 CODEX_CLI_TIMEOUT=120 alpha-holdings discover --risk moderate --horizon 3-5yr

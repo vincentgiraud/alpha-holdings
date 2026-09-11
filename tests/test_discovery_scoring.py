@@ -314,6 +314,25 @@ def test_scoring_rejects_ai_output_without_identity_reasoning_or_provenance(
         )
 
 
+def test_scoring_propagates_a_non_retryable_codex_failure() -> None:
+    class UsageLimitedProvider:
+        name = "codex-cli"
+        model = "test-model"
+
+        def score(self, prompt: str) -> str:
+            del prompt
+            raise llm.CodexCLIError("You've hit your usage limit", retryable=False)
+
+    with pytest.raises(llm.CodexCLIError, match="usage limit"):
+        score_company(
+            _company(),
+            _theme(),
+            _complete_fundamentals(),
+            provider=UsageLimitedProvider(),
+            clock=lambda: NOW,
+        )
+
+
 def test_cagr_uses_the_actual_elapsed_time_between_observations() -> None:
     growth, years = calculate_cagr(
         100,
@@ -785,6 +804,7 @@ def test_discover_publishes_a_versioned_scored_cohort(monkeypatch) -> None:
     assert "GRIDETF" in snapshot.provenance["market_data"]
     assert snapshot.allocation.core_pct == 100
     assert snapshot.allocation.capital == 10_000
+    assert snapshot.model_configuration["scoring_reasoning_effort"] == "low"
     assert all(
         "vehicle" not in entry
         for entry in snapshot.allocation.model_dump(mode="json")["entries"]
