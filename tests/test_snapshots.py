@@ -16,6 +16,7 @@ from alpha_holdings.models import (
     MacroRegime,
     MacroRegimeType,
     PortfolioAllocation,
+    PortfolioConstructionMode,
     PortfolioSleeve,
     RiskAppetite,
     RiskProfile,
@@ -95,6 +96,7 @@ def test_snapshot_instrument_records_reject_blank_tickers(model, values) -> None
 
 def _allocation(
     positions: list[InstrumentPosition] | None = None,
+    portfolio_construction_mode: PortfolioConstructionMode = PortfolioConstructionMode.AUTOMATIC,
 ) -> PortfolioAllocation:
     return PortfolioAllocation(
         risk_profile=RiskProfile(
@@ -109,7 +111,22 @@ def _allocation(
         ),
         positions=positions or [],
         core_pct=100,
+        portfolio_construction_mode=portfolio_construction_mode,
     )
+
+
+def test_snapshot_persists_the_portfolio_construction_mode() -> None:
+    snapshot = RunSnapshot(
+        allocation=_allocation(
+            portfolio_construction_mode=PortfolioConstructionMode.ETF_ONLY,
+        ),
+    )
+
+    restored = RunSnapshot.model_validate_json(snapshot.model_dump_json())
+
+    assert snapshot.portfolio_construction_mode is PortfolioConstructionMode.ETF_ONLY
+    assert restored.portfolio_construction_mode is PortfolioConstructionMode.ETF_ONLY
+    assert restored.allocation.portfolio_construction_mode is PortfolioConstructionMode.ETF_ONLY
 
 
 def test_run_snapshot_round_trips_a_coherent_research_run() -> None:

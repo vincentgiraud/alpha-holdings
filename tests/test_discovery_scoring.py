@@ -30,6 +30,7 @@ from alpha_holdings.models import (
     MacroRegime,
     MacroRegimeType,
     PortfolioAllocation,
+    PortfolioConstructionMode,
     PortfolioSleeve,
     PriceBasis,
     RiskAppetite,
@@ -673,7 +674,18 @@ def test_discovery_snapshot_rejects_a_score_without_evidence() -> None:
         )
 
 
-def test_discover_publishes_a_versioned_scored_cohort(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("mode_args", "expected_mode"),
+    [
+        (["--etf-only"], PortfolioConstructionMode.ETF_ONLY),
+        ([], PortfolioConstructionMode.AUTOMATIC),
+    ],
+)
+def test_discover_publishes_a_versioned_scored_cohort(
+    monkeypatch,
+    mode_args: list[str],
+    expected_mode: PortfolioConstructionMode,
+) -> None:
     class FakeTicker:
         def __init__(self, ticker: str) -> None:
             is_etf = ticker in {"VT", "GRIDETF"}
@@ -781,7 +793,10 @@ def test_discover_publishes_a_versioned_scored_cohort(monkeypatch) -> None:
     runner = CliRunner()
 
     with runner.isolated_filesystem():
-        result = runner.invoke(cli, ["discover", "--capital", "10000"])
+        result = runner.invoke(
+            cli,
+            ["discover", *mode_args, "--capital", "10000"],
+        )
         snapshot = RunSnapshotRepository().load_latest()
         legacy_files = [
             *Path("data/allocations").glob("*.json"),
@@ -791,6 +806,13 @@ def test_discover_publishes_a_versioned_scored_cohort(monkeypatch) -> None:
 
     assert result.exit_code == 0, result.output
     assert snapshot is not None
+    assert snapshot.portfolio_construction_mode is expected_mode
+    assert snapshot.allocation.portfolio_construction_mode is expected_mode
+    assert snapshot.model_configuration["portfolio_construction_mode"] == expected_mode.value
+    assert all(
+        position.instrument_type in {InstrumentType.ETF, InstrumentType.CASH}
+        for position in snapshot.positions
+    )
     assert snapshot.completeness.is_complete is True
     assert [score.ticker for score in snapshot.candidate_scores[_theme().name]] == [
         "ACME"

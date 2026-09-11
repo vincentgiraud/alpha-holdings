@@ -107,6 +107,13 @@ class InstrumentType(str, Enum):
     CASH = "cash"
 
 
+class PortfolioConstructionMode(str, Enum):
+    """Policy controlling which instrument types a fresh allocation may fund."""
+
+    AUTOMATIC = "automatic"
+    ETF_ONLY = "etf_only"
+
+
 class PortfolioSleeve(str, Enum):
     THEMATIC = "thematic"
     CORE = "core"
@@ -756,6 +763,9 @@ class PortfolioAllocation(BaseModel):
 
     risk_profile: RiskProfile
     macro_regime: MacroRegime
+    portfolio_construction_mode: PortfolioConstructionMode = Field(
+        default=PortfolioConstructionMode.AUTOMATIC,
+    )
     positions: list[InstrumentPosition] = Field(default_factory=list)
     entries: list[AllocationEntry] = Field(default_factory=list)
     core_pct: float = Field(
@@ -782,6 +792,12 @@ class PortfolioAllocation(BaseModel):
         description="Deterministic regime modifier applied by the allocation policy.",
     )
     residual_reason: Optional[str] = None
+    unfunded_themes: list[str] = Field(
+        default_factory=list,
+        description="Themes that could not receive a position under the selected mode.",
+    )
+    coverage_failure: bool = False
+    coverage_failure_reason: Optional[str] = None
     capital: Optional[float] = Field(
         default=None,
         description="Total capital to invest, if provided via --capital.",
@@ -790,6 +806,20 @@ class PortfolioAllocation(BaseModel):
 
     @model_validator(mode="after")
     def _validate_position_weights(self):
+        if self.portfolio_construction_mode is PortfolioConstructionMode.ETF_ONLY:
+            invalid = [
+                position.ticker
+                for position in self.positions
+                if position.instrument_type not in {
+                    InstrumentType.ETF,
+                    InstrumentType.CASH,
+                }
+            ]
+            if invalid:
+                raise ValueError(
+                    "ETF-only allocations cannot contain non-ETF positions: "
+                    + ", ".join(invalid)
+                )
         if not self.positions:
             return self
         tickers = [position.ticker for position in self.positions]
@@ -908,6 +938,9 @@ class RunSnapshot(BaseModel):
     schema_version: int = Field(default=1, ge=1)
     run_id: str = Field(default="", pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    portfolio_construction_mode: PortfolioConstructionMode | None = Field(
+        default=None,
+    )
     themes: list[ThemeThesis] = Field(default_factory=list)
     candidate_scores: dict[str, list[ThemeScore]] = Field(default_factory=dict)
     etf_recommendations: dict[str, ETFRecommendation] = Field(default_factory=dict)
@@ -941,6 +974,13 @@ class RunSnapshot(BaseModel):
     def _validate_position_projection(self):
         if self.positions != self.allocation.positions:
             raise ValueError("snapshot positions must match allocation positions")
+        allocation_mode = self.allocation.portfolio_construction_mode
+        if self.portfolio_construction_mode is None:
+            self.portfolio_construction_mode = allocation_mode
+        elif self.portfolio_construction_mode is not allocation_mode:
+            raise ValueError(
+                "snapshot construction mode must match the allocation"
+            )
         return self
 
 

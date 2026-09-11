@@ -9,6 +9,10 @@ from alpha_holdings.allocation import allocate
 from alpha_holdings.models import (
     AllocationEntry,
     Company,
+    ETFCandidateEvaluation,
+    ETFMarketEvidence,
+    ETFRecommendation,
+    ETFRecommendationType,
     EntryMethod,
     Fundamentals,
     InstrumentType,
@@ -16,6 +20,7 @@ from alpha_holdings.models import (
     MacroRegimeType,
     MarketCapCategory,
     PortfolioAllocation,
+    PortfolioConstructionMode,
     PortfolioSleeve,
     RiskAppetite,
     RiskProfile,
@@ -65,6 +70,42 @@ def _priced_stock(ticker: str, price: float = 100) -> Fundamentals:
         source="fixture-market-data",
         current_price=price,
         fetched_at=NOW,
+    )
+
+
+def _validated_etf_recommendation(theme: ThemeThesis, ticker: str) -> ETFRecommendation:
+    evidence = ETFMarketEvidence(
+        ticker=ticker,
+        provider_symbol=ticker,
+        name=f"{ticker} Fund",
+        quote_type="ETF",
+        average_daily_volume=100_000,
+        total_assets=500_000_000,
+        expense_ratio=0.004,
+        adjusted_close=100,
+        price_as_of=NOW,
+        source="fixture-etf-provider",
+        holdings={theme.all_companies[0].full_ticker: 100},
+    )
+    evaluation = ETFCandidateEvaluation(
+        ticker=ticker,
+        is_valid=True,
+        evidence=evidence,
+        holdings_coverage_pct=100,
+        unknown_weight_pct=0,
+        theme_coverage_pct=100,
+    )
+    return ETFRecommendation(
+        theme_name=theme.name,
+        etf_ticker=ticker,
+        etf_name=evidence.name,
+        holdings=evidence.holdings,
+        holdings_coverage_pct=100,
+        unknown_weight_pct=0,
+        selected_evidence=evidence,
+        candidate_evaluations=[evaluation],
+        recommendation=ETFRecommendationType.ETF_SUFFICIENT,
+        reasoning="Validated fixture ETF.",
     )
 
 
@@ -144,6 +185,113 @@ def test_no_eligible_theme_preserves_capital_in_the_configured_core() -> None:
     assert position.entry_price == 125
     assert position.price_timestamp == NOW
     assert allocation.capital == 10_000
+
+
+def test_etf_only_never_falls_back_to_stocks_when_theme_etfs_are_unavailable() -> None:
+    fixtures = [
+        _theme("Grid", "GRID"),
+        _theme("Water", "WATR"),
+        _theme("Robotics", "ROBO"),
+    ]
+    themes = [theme for theme, _score in fixtures]
+    scores = {theme.name: [score] for theme, score in fixtures}
+
+    allocation = allocate(
+        themes,
+        scores,
+        {},
+        _profile(),
+        _regime(),
+        fund_data={
+            "VT": _priced_etf("VT"),
+            "GRID": _priced_stock("GRID"),
+            "WATR": _priced_stock("WATR"),
+            "ROBO": _priced_stock("ROBO"),
+        },
+        portfolio_construction_mode=PortfolioConstructionMode.ETF_ONLY,
+        clock=lambda: NOW,
+    )
+
+    assert [(position.ticker, position.instrument_type, position.weight_pct)
+            for position in allocation.positions] == [
+        ("VT", InstrumentType.ETF, 100),
+    ]
+    assert allocation.portfolio_construction_mode is PortfolioConstructionMode.ETF_ONLY
+    assert set(allocation.unfunded_themes) == {"Grid", "Water", "Robotics"}
+    assert "validated core fallback" in (allocation.residual_reason or "")
+
+
+def test_etf_only_marks_a_cash_coverage_failure_when_no_etf_is_eligible() -> None:
+    theme, score = _theme("Grid", "GRID")
+
+    allocation = allocate(
+        [theme],
+        {theme.name: [score]},
+        {},
+        _profile(),
+        _regime(),
+        fund_data={},
+        capital=125.01,
+        portfolio_construction_mode=PortfolioConstructionMode.ETF_ONLY,
+        clock=lambda: NOW,
+    )
+
+    assert [(position.ticker, position.weight_pct) for position in allocation.positions] == [
+        ("CASH", 100),
+    ]
+    assert allocation.coverage_failure is True
+    assert allocation.unfunded_themes == ["Grid"]
+    assert "ETF-only coverage failure" in (allocation.coverage_failure_reason or "")
+    assert sum(position.capital_amount or 0 for position in allocation.positions) == 125.01
+
+
+def test_etf_only_consolidates_repeated_etf_selections_with_theme_attribution() -> None:
+    grid, grid_score = _theme("Grid", "GRID")
+    water, water_score = _theme("Water", "WATR")
+    robotics, robotics_score = _theme("Robotics", "ROBO")
+    themes = [grid, water, robotics]
+    scores = {
+        "Grid": [grid_score],
+        "Water": [water_score],
+        "Robotics": [robotics_score],
+    }
+    recommendations = {
+        "Grid": _validated_etf_recommendation(grid, "SHARED"),
+        "Water": _validated_etf_recommendation(water, "SHARED"),
+        "Robotics": _validated_etf_recommendation(robotics, "ROBOETF"),
+    }
+
+    allocation = allocate(
+        themes,
+        scores,
+        recommendations,
+        _profile(),
+        _regime(),
+        fund_data={
+            "VT": _priced_etf("VT"),
+            "SHARED": _priced_etf("SHARED"),
+            "ROBOETF": _priced_etf("ROBOETF"),
+        },
+        portfolio_construction_mode=PortfolioConstructionMode.ETF_ONLY,
+        clock=lambda: NOW,
+    )
+
+    positions = {
+        position.ticker: position
+        for position in allocation.positions
+        if position.sleeve is PortfolioSleeve.THEMATIC
+    }
+    assert set(positions) == {"SHARED", "ROBOETF"}
+    assert all(position.instrument_type is InstrumentType.ETF for position in positions.values())
+    assert {entry.theme: entry.tickers for entry in allocation.entries} == {
+        "Grid": ["SHARED"],
+        "Water": ["SHARED"],
+        "Robotics": ["ROBOETF"],
+    }
+    assert all("Validated fixture ETF." in entry.rationale for entry in allocation.entries)
+    assert sum(entry.pct_allocation for entry in allocation.entries) == pytest.approx(
+        sum(position.weight_pct for position in positions.values())
+    )
 
 
 def test_allocation_requires_the_profile_minimum_number_of_funded_themes() -> None:

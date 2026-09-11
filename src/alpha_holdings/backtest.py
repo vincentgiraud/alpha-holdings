@@ -119,11 +119,16 @@ def _legacy_snapshot(date_str: str) -> dict | None:
 
 def _versioned_snapshot_dict(snapshot, date_str: str | None = None) -> dict:
     """Project a versioned snapshot into the backtest compatibility shape."""
+    mode = getattr(snapshot, "portfolio_construction_mode", None)
+    if mode is None:
+        mode = getattr(snapshot.allocation, "portfolio_construction_mode", "automatic")
+    mode_value = getattr(mode, "value", mode)
     return {
         "date": date_str or snapshot.created_at.strftime("%Y%m%d"),
         "source": "versioned",
         "run_id": snapshot.run_id,
         "created_at": snapshot.created_at.isoformat(),
+        "portfolio_construction_mode": mode_value,
         "allocation": snapshot.allocation.model_dump(mode="json"),
         "scores": {
             theme: [score.model_dump(mode="json") for score in theme_scores]

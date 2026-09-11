@@ -181,6 +181,10 @@ def build_discovery_snapshot(
         }
         for ticker, result in sorted(observations.items())
     }
+    configuration = dict(model_configuration or {})
+    configuration["portfolio_construction_mode"] = (
+        allocation.portfolio_construction_mode.value
+    )
     return RunSnapshot(
         created_at=created_at or datetime.now(UTC),
         themes=themes,
@@ -190,7 +194,7 @@ def build_discovery_snapshot(
         prices=prices,
         positions=allocation.positions,
         allocation=allocation,
-        model_configuration=model_configuration or {},
+        model_configuration=configuration,
         provenance=snapshot_provenance,
     )
 

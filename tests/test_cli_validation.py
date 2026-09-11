@@ -143,6 +143,16 @@ def test_discover_accepts_positive_capital_and_supported_currency(
     assert result.exit_code == 0
     assert received["capital"] == 0.01
     assert received["base_currency"] == "EUR"
+    assert received["etf_only"] is False
+
+
+def test_discover_exposes_an_explicit_etf_only_mode(capture_command_callback) -> None:
+    received = capture_command_callback("discover")
+
+    result = CliRunner().invoke(cli, ["discover", "--etf-only"])
+
+    assert result.exit_code == 0
+    assert received["etf_only"] is True
 
 
 def test_codex_failure_is_rendered_as_a_concise_cli_error(

@@ -29,6 +29,7 @@ from alpha_holdings.models import (
     InstrumentType,
     MacroRegime,
     PortfolioAllocation,
+    PortfolioConstructionMode,
     PortfolioSleeve,
     RiskProfile,
     ThemeScore,
@@ -47,6 +48,7 @@ class _Candidate:
     instrument_type: InstrumentType
     conviction: float
     entry_method: EntryMethod
+    selection_rationale: str | None = None
 
 
 def allocate(
@@ -60,8 +62,14 @@ def allocate(
     capital: float | None = None,
     clock: Callable[[], datetime] | None = None,
     base_currency: str = "USD",
+    portfolio_construction_mode: PortfolioConstructionMode = (
+        PortfolioConstructionMode.AUTOMATIC
+    ),
 ) -> PortfolioAllocation:
     """Generate a fully invested model portfolio from validated instruments."""
+    portfolio_construction_mode = PortfolioConstructionMode(
+        portfolio_construction_mode
+    )
     observed_at = (clock or (lambda: datetime.now(UTC)))()
     priced = {ticker.upper(): data for ticker, data in (fund_data or {}).items()}
     base_thematic = get_thematic_pct(profile)
@@ -82,26 +90,51 @@ def allocate(
                 etf_recs.get(theme.name),
                 profile,
                 priced,
+                portfolio_construction_mode,
             )
         )
     }
+    unfunded_themes = (
+        [
+            theme.name
+            for theme in themes
+            if theme.name not in candidates_by_theme
+        ]
+        if portfolio_construction_mode is PortfolioConstructionMode.ETF_ONLY
+        else []
+    )
     eligible = [
         theme for theme in confidence_eligible if theme.name in candidates_by_theme
     ]
     minimum_themes = MIN_THEMES[profile.appetite]
     if len(eligible) < minimum_themes:
+        if portfolio_construction_mode is PortfolioConstructionMode.ETF_ONLY:
+            unfunded_themes = [theme.name for theme in themes]
         reason = None
         if eligible:
-            reason = (
-                f"{len(eligible)} validated themes is below the "
-                f"{profile.appetite.value} minimum of {minimum_themes}; "
-                f"{thematic_pct * 100:.1f}% moved to core"
-            )
+            if portfolio_construction_mode is PortfolioConstructionMode.ETF_ONLY:
+                reason = (
+                    f"{len(eligible)} validated ETF themes is below the "
+                    f"{profile.appetite.value} minimum of {minimum_themes}; "
+                    f"{thematic_pct * 100:.1f}% moved to the validated core fallback"
+                )
+            else:
+                reason = (
+                    f"{len(eligible)} validated themes is below the "
+                    f"{profile.appetite.value} minimum of {minimum_themes}; "
+                    f"{thematic_pct * 100:.1f}% moved to core"
+                )
         else:
-            reason = (
-                f"No validated themes met the allocation policy; "
-                f"{thematic_pct * 100:.1f}% moved to core"
-            )
+            if portfolio_construction_mode is PortfolioConstructionMode.ETF_ONLY:
+                reason = (
+                    f"No validated ETFs met the allocation policy; "
+                    f"{thematic_pct * 100:.1f}% moved to the validated core fallback"
+                )
+            else:
+                reason = (
+                    f"No validated themes met the allocation policy; "
+                    f"{thematic_pct * 100:.1f}% moved to core"
+                )
         return _non_thematic_allocation(
             profile=profile,
             regime=regime,
@@ -110,6 +143,8 @@ def allocate(
             modifier=modifier,
             observed_at=observed_at,
             base_currency=base_currency,
+            portfolio_construction_mode=portfolio_construction_mode,
+            unfunded_themes=unfunded_themes,
             residual_reason=reason,
         )
 
@@ -122,6 +157,17 @@ def allocate(
         max_theme_units=round(get_max_theme_pct(profile) * 1000),
         max_company_units=round(MAX_COMPANY_PCT[profile.appetite] * 1000),
     )
+    if portfolio_construction_mode is PortfolioConstructionMode.ETF_ONLY:
+        allocated_theme_names = {
+            theme_name
+            for (theme_name, _ticker), units in candidate_units.items()
+            if units > 0
+        }
+        unfunded_themes = [
+            theme.name
+            for theme in themes
+            if theme.name not in allocated_theme_names
+        ]
     thematic_units = sum(candidate_units.values())
 
     positions: list[InstrumentPosition] = []
@@ -181,9 +227,21 @@ def allocate(
                 ),
                 pct_allocation=sum(allocations.values()) / 10,
                 entry_method=entry_method,
-                rationale=(
-                    f"Confidence {theme.confidence_score}/10; "
-                    f"overlap modifier {overlap_penalties[theme.name]:.2f}"
+                rationale="; ".join(
+                    filter(
+                        None,
+                        [
+                            (
+                                f"Confidence {theme.confidence_score}/10; "
+                                f"overlap modifier {overlap_penalties[theme.name]:.2f}"
+                            ),
+                            *[
+                                candidate.selection_rationale
+                                for candidate in allocated_candidates
+                                if candidate.selection_rationale
+                            ],
+                        ],
+                    )
                 ),
                 entry_prices={
                     ticker: priced[ticker].current_price
@@ -258,10 +316,15 @@ def allocate(
             f"to {destination}"
         )
     residual_reason = "; ".join(routing_reasons) or None
+    coverage_failure, coverage_failure_reason = _coverage_failure_details(
+        portfolio_construction_mode,
+        cash_units / 10,
+    )
 
     return PortfolioAllocation(
         risk_profile=profile,
         macro_regime=regime,
+        portfolio_construction_mode=portfolio_construction_mode,
         positions=_with_capital_amounts(positions, capital),
         entries=entries,
         core_pct=core_units / 10,
@@ -270,6 +333,9 @@ def allocate(
         capital=capital,
         effective_allocation_modifier=modifier,
         residual_reason=residual_reason,
+        unfunded_themes=unfunded_themes,
+        coverage_failure=coverage_failure,
+        coverage_failure_reason=coverage_failure_reason,
         generated_at=observed_at,
     )
 
@@ -283,6 +349,8 @@ def _non_thematic_allocation(
     modifier: float,
     observed_at: datetime,
     base_currency: str,
+    portfolio_construction_mode: PortfolioConstructionMode,
+    unfunded_themes: list[str],
     residual_reason: str | None,
 ) -> PortfolioAllocation:
     if _is_valid_priced_instrument(CORE_TICKER, InstrumentType.ETF, priced):
@@ -308,17 +376,42 @@ def _non_thematic_allocation(
         residual_reason = (
             f"{residual_reason}; {suffix}" if residual_reason else suffix
         )
+    coverage_failure, coverage_failure_reason = _coverage_failure_details(
+        portfolio_construction_mode,
+        cash_pct,
+    )
     return PortfolioAllocation(
         risk_profile=profile,
         macro_regime=regime,
+        portfolio_construction_mode=portfolio_construction_mode,
         positions=_with_capital_amounts(positions, capital),
         core_pct=core_pct,
         cash_pct=cash_pct,
         capital=capital,
         effective_allocation_modifier=modifier,
         residual_reason=residual_reason,
+        unfunded_themes=unfunded_themes,
+        coverage_failure=coverage_failure,
+        coverage_failure_reason=coverage_failure_reason,
         generated_at=observed_at,
     )
+
+
+def _coverage_failure_details(
+    portfolio_construction_mode: PortfolioConstructionMode,
+    cash_pct: float,
+) -> tuple[bool, str | None]:
+    """Describe an ETF-only run that could fund only cash."""
+    if (
+        portfolio_construction_mode is PortfolioConstructionMode.ETF_ONLY
+        and cash_pct == 100.0
+    ):
+        return (
+            True,
+            "ETF-only coverage failure: no validated ETF could be funded and "
+            "the configured core fallback was unavailable; 100% retained as cash.",
+        )
+    return False, None
 
 
 def _validated_candidates(
@@ -327,6 +420,7 @@ def _validated_candidates(
     etf: ETFRecommendation | None,
     profile: RiskProfile,
     priced: dict[str, Fundamentals],
+    portfolio_construction_mode: PortfolioConstructionMode,
 ) -> list[_Candidate]:
     if (
         etf is not None
@@ -348,8 +442,12 @@ def _validated_candidates(
                     instrument_type=InstrumentType.ETF,
                     conviction=conviction,
                     entry_method=EntryMethod.DCA,
+                    selection_rationale=etf.reasoning,
                 )
             ]
+
+    if portfolio_construction_mode is PortfolioConstructionMode.ETF_ONLY:
+        return []
 
     from alpha_holdings.fundamentals import validate_company_identity
 

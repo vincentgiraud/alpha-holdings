@@ -24,6 +24,7 @@ from alpha_holdings.models import (
     MacroRegimeType,
     MarketDataStatus,
     OpportunityType,
+    PortfolioConstructionMode,
     RiskAppetite,
     RiskProfile,
     SupplyChainTier,
@@ -240,7 +241,19 @@ def cli(ctx: click.Context, verbose: bool, debug: bool) -> None:
 @click.option("--focus", multiple=True, help="Optional focus areas to bias discovery.")
 @click.option("--base-currency", type=SUPPORTED_CURRENCY, default="USD", help="Your base currency (for FX risk flags).")
 @click.option("--capital", type=POSITIVE_FINITE_FLOAT, default=None, help="Total capital to invest (shows $ amounts in allocation).")
-def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str, capital: float | None) -> None:
+@click.option(
+    "--etf-only",
+    is_flag=True,
+    help="Use ETF-only portfolio construction for this fresh allocation.",
+)
+def discover(
+    risk: str,
+    horizon: str,
+    focus: tuple[str, ...],
+    base_currency: str,
+    capital: float | None,
+    etf_only: bool,
+) -> None:
     """Full pipeline: signals → themes → fundamentals → scoring → allocation."""
     from alpha_holdings import allocation as alloc_mod
     from alpha_holdings import etfs as etfs_mod
@@ -250,6 +263,11 @@ def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str
     from alpha_holdings import themes as theme_mod
 
     profile = RiskProfile(appetite=RiskAppetite(risk), time_horizon=TimeHorizon(horizon))
+    portfolio_construction_mode = (
+        PortfolioConstructionMode.ETF_ONLY
+        if etf_only
+        else PortfolioConstructionMode.AUTOMATIC
+    )
     focus_areas = list(focus) if focus else None
 
     # Step 1: Macro signals
@@ -363,6 +381,7 @@ def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str
         capital=capital,
         clock=fund_mod.DEFAULT_CLOCK,
         base_currency=base_currency,
+        portfolio_construction_mode=portfolio_construction_mode,
     )
 
     # Display results
@@ -401,6 +420,7 @@ def discover(risk: str, horizon: str, focus: tuple[str, ...], base_currency: str
         etf_recommendations=etf_recs,
         created_at=fund_mod.DEFAULT_CLOCK(),
         model_configuration={
+            "portfolio_construction_mode": portfolio_construction_mode.value,
             "scoring_model": llm_mod.get_model(mini=True),
             "scoring_reasoning_effort": llm_mod.get_reasoning_effort(mini=True),
             "scoring_weights": score_mod.SCORING_WEIGHTS,
@@ -1325,6 +1345,26 @@ def _print_supply_chain_tree(theme, scores, fund_data, etf_rec, base_currency="U
 def _print_allocation(allocation) -> None:
     has_capital = allocation.capital is not None and allocation.capital > 0
     min_position = 200  # minimum viable position size
+
+    console.print(
+        "[dim]Portfolio construction mode: "
+        f"{allocation.portfolio_construction_mode.value}[/dim]"
+    )
+    if allocation.coverage_failure:
+        console.print(
+            Panel(
+                allocation.coverage_failure_reason
+                or "ETF-only coverage failure: allocation retained as cash.",
+                title="[bold red]Coverage Failure[/bold red]",
+                border_style="red",
+            )
+        )
+    elif allocation.unfunded_themes:
+        console.print(
+            "[yellow]Unfunded themes: "
+            + ", ".join(allocation.unfunded_themes)
+            + ". Capital routed to the validated core fallback or cash.[/yellow]"
+        )
 
     table = Table(title="Model Portfolio Allocation", show_lines=True)
     table.add_column("Theme", style="bold")
